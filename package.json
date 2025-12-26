@@ -1,0 +1,67 @@
+{
+  "name": "tracia",
+  "version": "0.1.1",
+  "description": "TypeScript/JavaScript SDK for Tracia - store, test, and trace LLM prompts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "lint": "eslint src tests",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "llm",
+    "prompt",
+    "tracing",
+    "observability",
+    "openai",
+    "chatgpt",
+    "anthropic",
+    "claude",
+    "google",
+    "gemini",
+    "ai"
+  ],
+  "author": "Tracia",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tracia-io/tracia-node"
+  },
+  "homepage": "https://tracia.io",
+  "bugs": {
+    "url": "https://github.com/tracia-io/tracia-node/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.55.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
