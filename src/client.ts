@@ -6,7 +6,7 @@ import {
 } from './types'
 
 const SDK_VERSION = process.env.SDK_VERSION || '0.0.0'
-const DEFAULT_TIMEOUT_MS = 30000
+const DEFAULT_TIMEOUT_MS = 120000
 
 interface HttpClientOptions {
   apiKey: string
