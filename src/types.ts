@@ -167,3 +167,19 @@ export interface ListTracesResult {
   traces: TraceListItem[]
   nextCursor?: string
 }
+
+export interface EvaluateOptions {
+  evaluator: string
+  value: number
+  note?: string
+}
+
+export interface EvaluateResult {
+  id: string
+  evaluatorKey: string
+  evaluatorName: string
+  value: number
+  source: string
+  note: string | null
+  createdAt: string
+}

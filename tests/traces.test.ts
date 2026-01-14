@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Tracia, TraciaError, TraciaErrorCode } from '../src/index'
+import { Tracia, TraciaError, TraciaErrorCode, Eval } from '../src/index'
 
 const mockFetch = vi.fn()
 global.fetch = mockFetch
@@ -290,6 +290,185 @@ describe('traces', () => {
       expect(url).toContain('status=SUCCESS')
       expect(url).toContain('userId=user_123')
       expect(url).toContain('limit=25')
+    })
+  })
+
+  describe('evaluate', () => {
+    const mockEvaluateResult = {
+      id: 'eval_abc123',
+      evaluatorKey: 'quality',
+      evaluatorName: 'Quality',
+      value: 1,
+      source: 'sdk',
+      note: null,
+      createdAt: '2024-01-05T00:00:00.000Z',
+    }
+
+    it('successfully submits positive evaluation', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockEvaluateResult,
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+      const result = await tracia.traces.evaluate('trace_abc123', {
+        evaluator: 'quality',
+        value: Eval.POSITIVE,
+      })
+
+      expect(result).toEqual(mockEvaluateResult)
+
+      const [url, options] = mockFetch.mock.calls[0]
+      expect(url).toContain('/api/v1/traces/trace_abc123/evaluations')
+      expect(options.method).toBe('POST')
+      expect(options.headers['Authorization']).toBe(`Bearer ${validApiKey}`)
+
+      const body = JSON.parse(options.body)
+      expect(body.evaluatorKey).toBe('quality')
+      expect(body.value).toBe(1)
+      expect(body.note).toBeUndefined()
+    })
+
+    it('successfully submits negative evaluation', async () => {
+      const negativeResult = { ...mockEvaluateResult, value: 0 }
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => negativeResult,
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+      const result = await tracia.traces.evaluate('trace_abc123', {
+        evaluator: 'quality',
+        value: Eval.NEGATIVE,
+      })
+
+      expect(result.value).toBe(0)
+
+      const [, options] = mockFetch.mock.calls[0]
+      const body = JSON.parse(options.body)
+      expect(body.value).toBe(0)
+    })
+
+    it('successfully submits numeric score', async () => {
+      const numericResult = { ...mockEvaluateResult, value: 8 }
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => numericResult,
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+      const result = await tracia.traces.evaluate('trace_abc123', {
+        evaluator: 'accuracy',
+        value: 8,
+      })
+
+      expect(result.value).toBe(8)
+
+      const [, options] = mockFetch.mock.calls[0]
+      const body = JSON.parse(options.body)
+      expect(body.value).toBe(8)
+    })
+
+    it('includes note when provided', async () => {
+      const resultWithNote = { ...mockEvaluateResult, note: 'Response was off-topic' }
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => resultWithNote,
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+      const result = await tracia.traces.evaluate('trace_abc123', {
+        evaluator: 'quality',
+        value: Eval.NEGATIVE,
+        note: 'Response was off-topic',
+      })
+
+      expect(result.note).toBe('Response was off-topic')
+
+      const [, options] = mockFetch.mock.calls[0]
+      const body = JSON.parse(options.body)
+      expect(body.note).toBe('Response was off-topic')
+    })
+
+    it('throws INVALID_REQUEST error for non-number value', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      try {
+        await tracia.traces.evaluate('trace_abc123', {
+          evaluator: 'quality',
+          value: 'invalid' as unknown as number,
+        })
+        expect.fail('Expected TraciaError to be thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        const traciaError = error as TraciaError
+        expect(traciaError.code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect(traciaError.message).toContain('Must be a number')
+      }
+
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+
+    it('throws NOT_FOUND error when trace does not exist', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: async () => ({
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Trace not found: unknown-trace',
+          },
+        }),
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      try {
+        await tracia.traces.evaluate('unknown-trace', {
+          evaluator: 'quality',
+          value: Eval.POSITIVE,
+        })
+        expect.fail('Expected TraciaError to be thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        const traciaError = error as TraciaError
+        expect(traciaError.code).toBe(TraciaErrorCode.NOT_FOUND)
+        expect(traciaError.statusCode).toBe(404)
+      }
+    })
+
+    it('encodes traceId with special characters', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockEvaluateResult,
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+      await tracia.traces.evaluate('trace/special', {
+        evaluator: 'quality',
+        value: Eval.POSITIVE,
+      })
+
+      const [url] = mockFetch.mock.calls[0]
+      expect(url).toContain('/api/v1/traces/trace%2Fspecial/evaluations')
+    })
+
+    it('works with different evaluator keys', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ...mockEvaluateResult, evaluatorKey: 'helpfulness' }),
+      })
+
+      const tracia = new Tracia({ apiKey: validApiKey })
+      await tracia.traces.evaluate('trace_abc123', {
+        evaluator: 'helpfulness',
+        value: Eval.POSITIVE,
+      })
+
+      const [, options] = mockFetch.mock.calls[0]
+      const body = JSON.parse(options.body)
+      expect(body.evaluatorKey).toBe('helpfulness')
     })
   })
 })

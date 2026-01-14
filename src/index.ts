@@ -21,8 +21,15 @@ export type {
   TraceStatus,
   ListTracesOptions,
   ListTracesResult,
+  EvaluateOptions,
+  EvaluateResult,
 } from './types'
 export { TraciaErrorCode } from './types'
+
+export const Eval = {
+  POSITIVE: 1,
+  NEGATIVE: 0,
+} as const
 
 const DEFAULT_BASE_URL = 'https://app.tracia.io'
 

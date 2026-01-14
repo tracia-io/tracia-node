@@ -1,5 +1,13 @@
 import { HttpClient } from './client'
-import { Trace, ListTracesOptions, ListTracesResult } from './types'
+import { TraciaError } from './errors'
+import {
+  Trace,
+  ListTracesOptions,
+  ListTracesResult,
+  EvaluateOptions,
+  EvaluateResult,
+  TraciaErrorCode,
+} from './types'
 
 export class Traces {
   constructor(private readonly client: HttpClient) {}
@@ -51,5 +59,28 @@ export class Traces {
     const path = query ? `/api/v1/traces?${query}` : '/api/v1/traces'
 
     return this.client.get<ListTracesResult>(path)
+  }
+
+  async evaluate(traceId: string, options: EvaluateOptions): Promise<EvaluateResult> {
+    if (typeof options.value !== 'number') {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        `Invalid evaluation value. Must be a number.`
+      )
+    }
+
+    const body: { evaluatorKey: string; value: number; note?: string } = {
+      evaluatorKey: options.evaluator,
+      value: options.value,
+    }
+
+    if (options.note !== undefined) {
+      body.note = options.note
+    }
+
+    return this.client.post<EvaluateResult>(
+      `/api/v1/traces/${encodeURIComponent(traceId)}/evaluations`,
+      body
+    )
   }
 }
