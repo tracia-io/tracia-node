@@ -7,10 +7,26 @@ import {
   EvaluateOptions,
   EvaluateResult,
   TraciaErrorCode,
+  CreateTracePayload,
+  CreateTraceResult,
 } from './types'
 
+/** @internal Symbol for setting pending traces map - not part of public API */
+export const INTERNAL_SET_PENDING_TRACES = Symbol('setPendingTracesMap')
+
 export class Traces {
+  private pendingTraces: Map<string, Promise<void>> | null = null
+
   constructor(private readonly client: HttpClient) {}
+
+  /** @internal */
+  [INTERNAL_SET_PENDING_TRACES](map: Map<string, Promise<void>>): void {
+    this.pendingTraces = map
+  }
+
+  async create(payload: CreateTracePayload): Promise<CreateTraceResult> {
+    return this.client.post<CreateTraceResult>('/api/v1/traces', payload)
+  }
 
   async get(traceId: string): Promise<Trace> {
     return this.client.get<Trace>(`/api/v1/traces/${encodeURIComponent(traceId)}`)
@@ -62,6 +78,13 @@ export class Traces {
   }
 
   async evaluate(traceId: string, options: EvaluateOptions): Promise<EvaluateResult> {
+    if (this.pendingTraces) {
+      const pendingTrace = this.pendingTraces.get(traceId)
+      if (pendingTrace) {
+        await pendingTrace
+      }
+    }
+
     if (typeof options.value !== 'number') {
       throw new TraciaError(
         TraciaErrorCode.INVALID_REQUEST,

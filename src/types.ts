@@ -1,5 +1,7 @@
 export interface TraciaOptions {
   apiKey: string
+  /** Called when background trace creation fails */
+  onTraceError?: (error: Error, traceId: string) => void
 }
 
 export interface RunVariables {
@@ -39,6 +41,15 @@ export enum TraciaErrorCode {
   NETWORK_ERROR = 'NETWORK_ERROR',
   TIMEOUT = 'TIMEOUT',
   UNKNOWN = 'UNKNOWN',
+  MISSING_PROVIDER_SDK = 'MISSING_PROVIDER_SDK',
+  MISSING_PROVIDER_API_KEY = 'MISSING_PROVIDER_API_KEY',
+  UNSUPPORTED_MODEL = 'UNSUPPORTED_MODEL',
+}
+
+export enum LLMProvider {
+  OPENAI = 'openai',
+  ANTHROPIC = 'anthropic',
+  GOOGLE = 'google',
 }
 
 export interface ApiErrorResponse {
@@ -182,4 +193,76 @@ export interface EvaluateResult {
   source: string
   note: string | null
   createdAt: string
+}
+
+// runLocal types
+
+export interface LocalPromptMessage {
+  role: MessageRole
+  content: string
+}
+
+export interface RunLocalInput {
+  messages: LocalPromptMessage[]
+  model: string
+
+  /** Explicitly specify the provider. Use for new/custom models not in the built-in list. */
+  provider?: LLMProvider
+
+  temperature?: number
+  maxOutputTokens?: number
+  topP?: number
+  stopSequences?: string[]
+  /** Timeout in milliseconds for the LLM call */
+  timeoutMs?: number
+
+  /** Provider-specific options passed directly to the SDK */
+  customOptions?: Record<string, unknown>
+
+  variables?: Record<string, string>
+
+  providerApiKey?: string
+
+  tags?: string[]
+  userId?: string
+  sessionId?: string
+  sendTrace?: boolean
+  /** Custom trace ID. Must match format: tr_ + 16 hex characters */
+  traceId?: string
+}
+
+export interface RunLocalResult {
+  text: string
+  traceId: string
+  latencyMs: number
+  usage: TokenUsage
+  cost: number | null
+  provider: LLMProvider
+  model: string
+}
+
+export interface CreateTracePayload {
+  traceId: string
+  model: string
+  provider: LLMProvider
+  input: { messages: LocalPromptMessage[] }
+  variables: Record<string, string> | null
+  output: string | null
+  status: TraceStatus
+  error: string | null
+  latencyMs: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  tags?: string[]
+  userId?: string
+  sessionId?: string
+  temperature?: number
+  maxOutputTokens?: number
+  topP?: number
+}
+
+export interface CreateTraceResult {
+  traceId: string
+  cost: number | null
 }
