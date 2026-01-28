@@ -69,7 +69,7 @@ export interface ApiSuccessResponse {
   cost: number
 }
 
-export type MessageRole = 'system' | 'user' | 'assistant'
+export type MessageRole = 'system' | 'developer' | 'user' | 'assistant' | 'tool'
 
 export interface PromptMessage {
   id: string
@@ -196,16 +196,114 @@ export interface EvaluateResult {
   createdAt: string
 }
 
-// runLocal types
+// Tool types
 
+export interface ToolDefinition {
+  name: string
+  description: string
+  parameters: ToolParameters
+}
+
+export interface ToolParameters {
+  type: 'object'
+  properties: Record<string, JsonSchemaProperty>
+  required?: string[]
+}
+
+export interface JsonSchemaProperty {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object'
+  description?: string
+  enum?: (string | number)[]
+  items?: JsonSchemaProperty
+  properties?: Record<string, JsonSchemaProperty>
+  required?: string[]
+}
+
+/**
+ * Tool call returned in results - user-friendly format.
+ */
+export interface ToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export type ToolChoice = 'auto' | 'none' | 'required' | { tool: string }
+
+export type FinishReason = 'stop' | 'tool_calls' | 'max_tokens'
+
+// ============================================================================
+// Message content parts
+// ============================================================================
+
+/**
+ * Text content part for messages.
+ */
+export interface TextPart {
+  type: 'text'
+  text: string
+}
+
+/**
+ * Tool call part in assistant messages.
+ */
+export interface ToolCallPart {
+  type: 'tool_call'
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export type ContentPart = TextPart | ToolCallPart
+
+// ============================================================================
+// Messages
+// ============================================================================
+
+/**
+ * Message format for LLM conversations.
+ *
+ * @example System message
+ * ```typescript
+ * { role: 'system', content: 'You are a helpful assistant.' }
+ * ```
+ *
+ * @example User message
+ * ```typescript
+ * { role: 'user', content: 'What is the weather?' }
+ * ```
+ *
+ * @example Assistant message with tool calls
+ * ```typescript
+ * {
+ *   role: 'assistant',
+ *   content: [
+ *     { type: 'text', text: 'Let me check the weather.' },
+ *     { type: 'tool_call', id: 'call_123', name: 'get_weather', arguments: { location: 'Paris' } }
+ *   ]
+ * }
+ * ```
+ *
+ * @example Tool result message (simple format)
+ * ```typescript
+ * { role: 'tool', toolCallId: 'call_123', toolName: 'get_weather', content: '{"temp": 22, "unit": "celsius"}' }
+ * ```
+ */
 export interface LocalPromptMessage {
   role: MessageRole
-  content: string
+  content: string | ContentPart[]
+  /** Required when role is 'tool' - the ID of the tool call this is responding to */
+  toolCallId?: string
+  /** Required when role is 'tool' - the name of the tool that was called */
+  toolName?: string
 }
 
 export interface RunLocalInput {
   messages: LocalPromptMessage[]
   model: string
+
+  /** Enable streaming. When true, returns LocalStream. When false/undefined, returns Promise<RunLocalResult>. */
+  stream?: boolean
 
   /** Explicitly specify the provider. Use for new/custom models not in the built-in list. */
   provider?: LLMProvider
@@ -230,6 +328,14 @@ export interface RunLocalInput {
   sendTrace?: boolean
   /** Custom trace ID. Must match format: tr_ + 16 hex characters */
   traceId?: string
+
+  /** Tool definitions for function calling */
+  tools?: ToolDefinition[]
+  /** Control which tools the model can use */
+  toolChoice?: ToolChoice
+
+  /** AbortSignal to cancel the request (only used when stream: true) */
+  signal?: AbortSignal
 }
 
 export interface RunLocalResult {
@@ -240,6 +346,12 @@ export interface RunLocalResult {
   cost: number | null
   provider: LLMProvider
   model: string
+  /** Tool calls made by the model, empty array if none */
+  toolCalls: ToolCall[]
+  /** Reason the model stopped generating */
+  finishReason: FinishReason
+  /** Full assistant message for round-tripping in multi-turn conversations */
+  message: LocalPromptMessage
 }
 
 export interface CreateTracePayload {
@@ -261,6 +373,8 @@ export interface CreateTracePayload {
   temperature?: number
   maxOutputTokens?: number
   topP?: number
+  tools?: ToolDefinition[]
+  toolCalls?: ToolCall[]
 }
 
 export interface CreateTraceResult {
@@ -268,15 +382,7 @@ export interface CreateTraceResult {
   cost: number | null
 }
 
-// Streaming types for runLocalStream
-
-/**
- * Input options for streaming LLM calls via runLocalStream().
- */
-export interface RunLocalStreamInput extends RunLocalInput {
-  /** AbortSignal to cancel the stream */
-  signal?: AbortSignal
-}
+// Streaming types
 
 /**
  * Final result returned after a stream completes.
@@ -288,13 +394,14 @@ export interface StreamResult extends RunLocalResult {
 }
 
 /**
- * A streaming response from runLocalStream().
+ * A streaming response from runLocal({ stream: true }).
  *
  * @example
  * ```typescript
- * const stream = tracia.runLocalStream({
+ * const stream = tracia.runLocal({
  *   model: 'gpt-4o',
  *   messages: [{ role: 'user', content: 'Write a haiku' }],
+ *   stream: true,
  * })
  *
  * // traceId is available immediately
@@ -329,5 +436,145 @@ export interface LocalStream {
   readonly result: Promise<StreamResult>
 
   /** Abort the stream. The result promise will resolve with aborted: true */
+  abort(): void
+}
+
+// ============================================================================
+// Responses API types (OpenAI-specific)
+// ============================================================================
+
+/**
+ * Input item for the Responses API.
+ * Can be a message (developer/user) or a function call output.
+ */
+export type ResponsesInputItem =
+  | { role: 'developer' | 'user'; content: string }
+  | { type: 'function_call_output'; call_id: string; output: string }
+  | ResponsesOutputItem
+
+/**
+ * Output item from a Responses API call.
+ * These can be added back to input for multi-turn conversations.
+ */
+export interface ResponsesOutputItem {
+  type: 'message' | 'function_call' | 'reasoning'
+  [key: string]: unknown
+}
+
+/**
+ * Event yielded during Responses API streaming.
+ */
+export type ResponsesEvent =
+  | { type: 'text_delta'; data: string }
+  | { type: 'text'; data: string }
+  | { type: 'reasoning'; content: string }
+  | { type: 'tool_call'; id: string; callId: string; name: string; arguments: Record<string, unknown> }
+  | { type: 'done'; usage: TokenUsage }
+
+/**
+ * Input options for runResponses().
+ */
+export interface RunResponsesInput {
+  /** Model to use (e.g., 'gpt-4o', 'o1', 'o3-mini') */
+  model: string
+
+  /** Input items for the conversation */
+  input: ResponsesInputItem[]
+
+  /** Enable streaming. When true, returns ResponsesStream. When false/undefined, returns Promise<RunResponsesResult>. */
+  stream?: boolean
+
+  /** Tool definitions for function calling */
+  tools?: ToolDefinition[]
+
+  /** Maximum output tokens */
+  maxOutputTokens?: number
+
+  /** Provider API key override */
+  providerApiKey?: string
+
+  /** AbortSignal to cancel the request (only used when stream: true) */
+  signal?: AbortSignal
+
+  /** Timeout in milliseconds */
+  timeoutMs?: number
+
+  /** Whether to send trace to Tracia (default: true) */
+  sendTrace?: boolean
+
+  /** Custom trace ID */
+  traceId?: string
+
+  /** Tags for the trace */
+  tags?: string[]
+
+  /** User ID for the trace */
+  userId?: string
+
+  /** Session ID for the trace */
+  sessionId?: string
+}
+
+/**
+ * Final result from a Responses API call.
+ */
+export interface RunResponsesResult {
+  /** Final text output */
+  text: string
+
+  /** Trace ID for this request */
+  traceId: string
+
+  /** Latency in milliseconds */
+  latencyMs: number
+
+  /** Token usage */
+  usage: TokenUsage
+
+  /** Output items that can be added back to input for multi-turn */
+  outputItems: ResponsesOutputItem[]
+
+  /** Tool calls made by the model */
+  toolCalls: Array<{ id: string; callId: string; name: string; arguments: Record<string, unknown> }>
+
+  /** Whether the stream was aborted */
+  aborted: boolean
+}
+
+/**
+ * A streaming response from runResponses({ stream: true }).
+ *
+ * @example
+ * ```typescript
+ * const stream = tracia.runResponses({
+ *   model: 'o3-mini',
+ *   input: [
+ *     { role: 'developer', content: 'You are a helpful assistant.' },
+ *     { role: 'user', content: 'What is 2+2?' },
+ *   ],
+ *   stream: true,
+ * })
+ *
+ * for await (const event of stream) {
+ *   if (event.type === 'text_delta') process.stdout.write(event.data)
+ *   if (event.type === 'reasoning') console.log('Thinking:', event.content)
+ *   if (event.type === 'tool_call') console.log('Tool:', event.name)
+ * }
+ *
+ * const result = await stream.result
+ * console.log('Output items:', result.outputItems)
+ * ```
+ */
+export interface ResponsesStream {
+  /** Trace ID for this request, available immediately */
+  readonly traceId: string
+
+  /** Async iterator yielding events */
+  [Symbol.asyncIterator](): AsyncIterator<ResponsesEvent>
+
+  /** Promise that resolves to the final result after stream completes */
+  readonly result: Promise<RunResponsesResult>
+
+  /** Abort the stream */
   abort(): void
 }

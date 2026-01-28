@@ -1,6 +1,6 @@
 {
   "name": "tracia",
-  "version": "0.2.0",
+  "version": "0.2.7",
   "description": "TypeScript/JavaScript SDK for Tracia - store, test, and trace LLM prompts",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -40,22 +40,47 @@
     "claude",
     "google",
     "gemini",
-    "ai"
+    "ai",
+    "vercel-ai-sdk"
   ],
   "author": "Tracia",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tracia-io/tracia-node"
+    "url": "git+https://github.com/tracia-io/tracia-node.git"
   },
   "homepage": "https://tracia.io",
   "bugs": {
     "url": "https://github.com/tracia-io/tracia-node/issues"
   },
+  "peerDependencies": {
+    "@ai-sdk/anthropic": ">=3.0.0",
+    "@ai-sdk/google": ">=3.0.0",
+    "@ai-sdk/openai": ">=3.0.0",
+    "ai": ">=6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": false
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.33",
+    "@ai-sdk/google": "^3.0.18",
+    "@ai-sdk/openai": "^3.0.23",
     "@types/node": "^20.10.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
+    "ai": "^6.0.64",
     "eslint": "^8.55.0",
     "tsup": "^8.0.0",
     "typescript": "^5.3.0",

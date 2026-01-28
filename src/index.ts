@@ -1,8 +1,13 @@
 import { HttpClient } from './client'
 import { TraciaError } from './errors'
 import { Prompts } from './prompts'
-import { ProviderRegistry } from './providers'
-import { LLMProviderAdapter, ProviderCompletionResult } from './providers/types'
+import {
+  complete,
+  stream,
+  responsesStream,
+  resolveProvider,
+  CompletionResult,
+} from './providers'
 import { Traces, INTERNAL_SET_PENDING_TRACES } from './traces'
 import {
   TraciaOptions,
@@ -11,10 +16,16 @@ import {
   LocalPromptMessage,
   RunLocalInput,
   RunLocalResult,
-  RunLocalStreamInput,
   StreamResult,
   LocalStream,
   TraceStatus,
+  ToolCall,
+  ContentPart,
+  RunResponsesInput,
+  RunResponsesResult,
+  ResponsesStream,
+  ResponsesEvent,
+  ResponsesInputItem,
 } from './types'
 import { generateTraceId, isValidTraceIdFormat } from './utils'
 
@@ -41,11 +52,27 @@ export type {
   LocalPromptMessage,
   RunLocalInput,
   RunLocalResult,
-  RunLocalStreamInput,
   StreamResult,
   LocalStream,
   CreateTracePayload,
   CreateTraceResult,
+  ToolDefinition,
+  ToolParameters,
+  JsonSchemaProperty,
+  ToolCall,
+  ToolChoice,
+  FinishReason,
+  // Message content parts
+  TextPart,
+  ToolCallPart,
+  ContentPart,
+  // Responses API types
+  ResponsesInputItem,
+  ResponsesOutputItem,
+  ResponsesEvent,
+  RunResponsesInput,
+  RunResponsesResult,
+  ResponsesStream,
 } from './types'
 export { TraciaErrorCode, LLMProvider } from './types'
 
@@ -68,9 +95,40 @@ const ENV_VAR_MAP: Record<LLMProvider, string> = {
   [LLMProvider.GOOGLE]: 'GOOGLE_API_KEY',
 }
 
+function convertResponsesItemToMessage(item: ResponsesInputItem): LocalPromptMessage {
+  if ('role' in item && (item.role === 'developer' || item.role === 'user')) {
+    const messageItem = item as { role: 'developer' | 'user'; content: string }
+    return {
+      role: messageItem.role === 'developer' ? 'system' : 'user',
+      content: messageItem.content,
+    }
+  }
+
+  if ('type' in item && item.type === 'function_call_output') {
+    // Convert Responses API function_call_output to Tracia tool message format
+    const outputItem = item as { type: 'function_call_output'; call_id: string; output: string }
+    return {
+      role: 'tool',
+      toolCallId: outputItem.call_id,
+      content: outputItem.output,
+    }
+  }
+
+  if ('type' in item) {
+    return {
+      role: 'assistant',
+      content: JSON.stringify(item),
+    }
+  }
+
+  return {
+    role: 'user',
+    content: JSON.stringify(item),
+  }
+}
+
 export class Tracia {
   private readonly client: HttpClient
-  private readonly registry: ProviderRegistry
   private readonly pendingTraces = new Map<string, Promise<void>>()
   private readonly onTraceError?: (error: Error, traceId: string) => void
   readonly prompts: Prompts
@@ -90,13 +148,49 @@ export class Tracia {
     })
 
     this.onTraceError = options.onTraceError
-    this.registry = new ProviderRegistry()
     this.prompts = new Prompts(this.client)
     this.traces = new Traces(this.client)
     this.traces[INTERNAL_SET_PENDING_TRACES](this.pendingTraces)
   }
 
-  async runLocal(input: RunLocalInput): Promise<RunLocalResult> {
+  /**
+   * Execute an LLM call locally using the Vercel AI SDK.
+   *
+   * @example Non-streaming (default)
+   * ```typescript
+   * const result = await tracia.runLocal({
+   *   model: 'gpt-4o',
+   *   messages: [{ role: 'user', content: 'Hello' }],
+   * })
+   * console.log(result.text)
+   * ```
+   *
+   * @example Streaming
+   * ```typescript
+   * const stream = tracia.runLocal({
+   *   model: 'gpt-4o',
+   *   messages: [{ role: 'user', content: 'Write a poem' }],
+   *   stream: true,
+   * })
+   *
+   * for await (const chunk of stream) {
+   *   process.stdout.write(chunk)
+   * }
+   *
+   * const result = await stream.result
+   * console.log('Tokens used:', result.usage.totalTokens)
+   * ```
+   */
+  runLocal(input: RunLocalInput & { stream: true }): LocalStream
+  runLocal(input: RunLocalInput & { stream?: false }): Promise<RunLocalResult>
+  runLocal(input: RunLocalInput): Promise<RunLocalResult> | LocalStream {
+    if (input.stream === true) {
+      return this.runLocalStreaming(input)
+    }
+    return this.runLocalNonStreaming(input)
+  }
+
+  private async runLocalNonStreaming(input: RunLocalInput): Promise<RunLocalResult> {
     this.validateRunLocalInput(input)
 
     let traceId = ''
@@ -111,34 +205,25 @@ export class Tracia {
     }
 
     const interpolatedMessages = this.interpolateMessages(input.messages, input.variables)
-    const adapter = input.provider
-      ? this.registry.getAdapterForProvider(input.provider)
-      : this.registry.getAdapterForModel(input.model)
-
-    if (!adapter.isAvailable()) {
-      throw new TraciaError(
-        TraciaErrorCode.MISSING_PROVIDER_SDK,
-        `Provider SDK for ${adapter.provider} is not installed. Please install the required SDK.`
-      )
-    }
-
-    const apiKey = this.getProviderApiKey(adapter.provider, input.providerApiKey)
+    const provider = resolveProvider(input.model, input.provider)
+    const apiKey = this.getProviderApiKey(provider, input.providerApiKey)
 
     const startTime = Date.now()
-    let completionResult: ProviderCompletionResult | null = null
+    let completionResult: CompletionResult | null = null
     let errorMessage: string | null = null
+
     try {
-      completionResult = await adapter.complete({
+      completionResult = await complete({
         model: input.model,
         messages: interpolatedMessages,
         apiKey,
-        config: {
-          temperature: input.temperature,
-          maxOutputTokens: input.maxOutputTokens,
-          topP: input.topP,
-          stopSequences: input.stopSequences,
-          customOptions: input.customOptions,
-        },
+        provider: input.provider,
+        temperature: input.temperature,
+        maxOutputTokens: input.maxOutputTokens,
+        topP: input.topP,
+        stopSequences: input.stopSequences,
+        tools: input.tools,
+        toolChoice: input.toolChoice,
         timeoutMs: input.timeoutMs,
       })
     } catch (error) {
@@ -155,7 +240,7 @@ export class Tracia {
       this.scheduleTraceCreation(traceId, {
         traceId,
         model: input.model,
-        provider: adapter.provider,
+        provider: completionResult?.provider ?? provider,
         input: { messages: interpolatedMessages },
         variables: input.variables ?? null,
         output: completionResult?.text ?? null,
@@ -171,12 +256,18 @@ export class Tracia {
         temperature: input.temperature,
         maxOutputTokens: input.maxOutputTokens,
         topP: input.topP,
+        tools: input.tools,
+        toolCalls: completionResult?.toolCalls,
       })
     }
 
     if (errorMessage) {
       throw new TraciaError(TraciaErrorCode.PROVIDER_ERROR, errorMessage)
     }
+
+    const toolCalls = completionResult!.toolCalls
+    const finishReason = completionResult!.finishReason
+    const message = this.buildAssistantMessage(completionResult!.text, toolCalls)
 
     return {
       text: completionResult!.text,
@@ -188,38 +279,15 @@ export class Tracia {
         totalTokens: completionResult!.totalTokens,
       },
       cost: null,
-      provider: adapter.provider,
+      provider: completionResult!.provider,
       model: input.model,
+      toolCalls,
+      finishReason,
+      message,
     }
   }
 
-  /**
-   * Execute an LLM call with streaming response.
-   *
-   * Returns a LocalStream object that can be iterated to receive text chunks
-   * as they arrive. The trace ID is available immediately, and the final
-   * result (with usage stats) is available after iteration completes.
-   *
-   * @example
-   * ```typescript
-   * const stream = tracia.runLocalStream({
-   *   model: 'gpt-4o',
-   *   messages: [{ role: 'user', content: 'Write a poem' }],
-   * })
-   *
-   * for await (const chunk of stream) {
-   *   process.stdout.write(chunk)
-   * }
-   *
-   * const result = await stream.result
-   * console.log('Tokens used:', result.usage.totalTokens)
-   * ```
-   *
-   * @param input - The input options including model, messages, and optional settings
-   * @returns A LocalStream object for iterating chunks and accessing the final result
-   * @throws {TraciaError} If validation fails (missing model, empty messages, invalid traceId format)
-   */
-  runLocalStream(input: RunLocalStreamInput): LocalStream {
+  private runLocalStreaming(input: RunLocalInput): LocalStream {
     this.validateRunLocalInput(input)
 
     let traceId = ''
@@ -234,18 +302,8 @@ export class Tracia {
     }
 
     const interpolatedMessages = this.interpolateMessages(input.messages, input.variables)
-    const adapter = input.provider
-      ? this.registry.getAdapterForProvider(input.provider)
-      : this.registry.getAdapterForModel(input.model)
-
-    if (!adapter.isAvailable()) {
-      throw new TraciaError(
-        TraciaErrorCode.MISSING_PROVIDER_SDK,
-        `Provider SDK for ${adapter.provider} is not installed. Please install the required SDK.`
-      )
-    }
-
-    const apiKey = this.getProviderApiKey(adapter.provider, input.providerApiKey)
+    const provider = resolveProvider(input.model, input.provider)
+    const apiKey = this.getProviderApiKey(provider, input.providerApiKey)
 
     const abortController = new AbortController()
     const combinedSignal = input.signal
@@ -255,7 +313,7 @@ export class Tracia {
     return this.createLocalStream(
       input,
       interpolatedMessages,
-      adapter,
+      provider,
       apiKey,
       traceId,
       combinedSignal,
@@ -263,10 +321,260 @@ export class Tracia {
     )
   }
 
+  /**
+   * Execute an LLM call using OpenAI's Responses API.
+   *
+   * The Responses API is OpenAI-specific and supports:
+   * - Reasoning models (o1, o3-mini) with reasoning summaries
+   * - Multi-turn conversations with output items
+   * - Different input format (developer/user roles, function_call_output)
+   *
+   * @example Non-streaming (default)
+   * ```typescript
+   * const result = await tracia.runResponses({
+   *   model: 'o3-mini',
+   *   input: [
+   *     { role: 'developer', content: 'You are helpful.' },
+   *     { role: 'user', content: 'What is 2+2?' },
+   *   ],
+   * })
+   * console.log(result.text)
+   * ```
+   *
+   * @example Streaming
+   * ```typescript
+   * const stream = tracia.runResponses({
+   *   model: 'o3-mini',
+   *   input: [
+   *     { role: 'developer', content: 'You are helpful.' },
+   *     { role: 'user', content: 'What is 2+2?' },
+   *   ],
+   *   stream: true,
+   * })
+   *
+   * for await (const event of stream) {
+   *   if (event.type === 'text_delta') process.stdout.write(event.data)
+   *   if (event.type === 'reasoning') console.log('Reasoning:', event.content)
+   *   if (event.type === 'tool_call') console.log('Tool:', event.name, event.arguments)
+   * }
+   *
+   * const result = await stream.result
+   * console.log('Output items:', result.outputItems)
+   * ```
+   */
+  runResponses(input: RunResponsesInput & { stream: true }): ResponsesStream
+  runResponses(input: RunResponsesInput & { stream?: false }): Promise<RunResponsesResult>
+  runResponses(input: RunResponsesInput): Promise<RunResponsesResult> | ResponsesStream {
+    if (input.stream === true) {
+      return this.runResponsesStreaming(input)
+    }
+    return this.runResponsesNonStreaming(input)
+  }
+
+  private async runResponsesNonStreaming(input: RunResponsesInput): Promise<RunResponsesResult> {
+    const stream = this.runResponsesStreaming(input)
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _event of stream) {
+      // Consume events
+    }
+
+    return stream.result
+  }
+
+  private runResponsesStreaming(input: RunResponsesInput): ResponsesStream {
+    this.validateResponsesInput(input)
+
+    let traceId = ''
+    if (input.sendTrace !== false) {
+      if (input.traceId && !isValidTraceIdFormat(input.traceId)) {
+        throw new TraciaError(
+          TraciaErrorCode.INVALID_REQUEST,
+          `Invalid trace ID format. Must match: tr_ + 16 hex characters (e.g., tr_1234567890abcdef)`
+        )
+      }
+      traceId = input.traceId || generateTraceId()
+    }
+
+    const apiKey = this.getProviderApiKey(LLMProvider.OPENAI, input.providerApiKey)
+
+    const abortController = new AbortController()
+    const combinedSignal = input.signal
+      ? this.combineAbortSignals(input.signal, abortController.signal)
+      : abortController.signal
+
+    return this.createResponsesStream(
+      input,
+      apiKey,
+      traceId,
+      combinedSignal,
+      abortController
+    )
+  }
+
+  private validateResponsesInput(input: RunResponsesInput): void {
+    if (!input.model || input.model.trim() === '') {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'model is required and cannot be empty'
+      )
+    }
+
+    if (!input.input || input.input.length === 0) {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'input array is required and cannot be empty'
+      )
+    }
+  }
+
+  private createResponsesStream(
+    input: RunResponsesInput,
+    apiKey: string,
+    traceId: string,
+    signal: AbortSignal,
+    abortController: AbortController
+  ): ResponsesStream {
+    const startTime = Date.now()
+    let aborted = false
+    let resolveResult: (result: RunResponsesResult) => void
+    let rejectResult: (error: Error) => void
+
+    const resultPromise = new Promise<RunResponsesResult>((resolve, reject) => {
+      resolveResult = resolve
+      rejectResult = reject
+    })
+
+    const providerStream = responsesStream({
+      model: input.model,
+      input: input.input,
+      apiKey,
+      tools: input.tools,
+      maxOutputTokens: input.maxOutputTokens,
+      timeoutMs: input.timeoutMs,
+      signal,
+    })
+
+    let collectedText = ''
+    const scheduleTrace = this.scheduleTraceCreation.bind(this)
+
+    async function* wrappedEvents(): AsyncGenerator<ResponsesEvent> {
+      try {
+        for await (const event of providerStream.events) {
+          if (event.type === 'text_delta') {
+            collectedText += event.data
+          }
+          yield event
+        }
+
+        const providerResult = await providerStream.result
+        const latencyMs = Date.now() - startTime
+
+        if (traceId) {
+          scheduleTrace(traceId, {
+            traceId,
+            model: input.model,
+            provider: LLMProvider.OPENAI,
+            input: { messages: input.input.map(item => convertResponsesItemToMessage(item)) },
+            variables: null,
+            output: providerResult.text,
+            status: providerResult.aborted ? TRACE_STATUS_ERROR : TRACE_STATUS_SUCCESS,
+            error: providerResult.aborted ? 'Stream aborted' : null,
+            latencyMs,
+            inputTokens: providerResult.usage.inputTokens,
+            outputTokens: providerResult.usage.outputTokens,
+            totalTokens: providerResult.usage.totalTokens,
+            tags: input.tags,
+            userId: input.userId,
+            sessionId: input.sessionId,
+            tools: input.tools,
+            toolCalls: providerResult.toolCalls.map(tc => ({
+              id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments,
+            })),
+          })
+        }
+
+        resolveResult!({
+          text: providerResult.text,
+          traceId,
+          latencyMs,
+          usage: providerResult.usage,
+          outputItems: providerResult.outputItems,
+          toolCalls: providerResult.toolCalls,
+          aborted: providerResult.aborted,
+        })
+      } catch (error) {
+        const latencyMs = Date.now() - startTime
+        const isAborted = aborted || signal.aborted
+        const errorMessage = isAborted
+          ? 'Stream aborted'
+          : error instanceof Error
+            ? error.message
+            : String(error)
+
+        if (traceId) {
+          scheduleTrace(traceId, {
+            traceId,
+            model: input.model,
+            provider: LLMProvider.OPENAI,
+            input: { messages: input.input.map(item => convertResponsesItemToMessage(item)) },
+            variables: null,
+            output: collectedText || null,
+            status: TRACE_STATUS_ERROR,
+            error: errorMessage,
+            latencyMs,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            tags: input.tags,
+            userId: input.userId,
+            sessionId: input.sessionId,
+            tools: input.tools,
+          })
+        }
+
+        if (isAborted) {
+          resolveResult!({
+            text: collectedText,
+            traceId,
+            latencyMs,
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            outputItems: [],
+            toolCalls: [],
+            aborted: true,
+          })
+        } else {
+          const traciaError =
+            error instanceof TraciaError
+              ? error
+              : new TraciaError(TraciaErrorCode.PROVIDER_ERROR, errorMessage)
+          rejectResult!(traciaError)
+          throw traciaError
+        }
+      }
+    }
+
+    const asyncIterator = wrappedEvents()
+
+    return {
+      traceId,
+      [Symbol.asyncIterator]() {
+        return asyncIterator
+      },
+      result: resultPromise,
+      abort() {
+        aborted = true
+        abortController.abort()
+      },
+    }
+  }
+
   private createLocalStream(
-    input: RunLocalStreamInput,
+    input: RunLocalInput,
     interpolatedMessages: LocalPromptMessage[],
-    adapter: LLMProviderAdapter,
+    provider: LLMProvider,
     apiKey: string,
     traceId: string,
     signal: AbortSignal,
@@ -282,23 +590,24 @@ export class Tracia {
       rejectResult = reject
     })
 
-    const providerStream = adapter.stream({
+    const providerStream = stream({
       model: input.model,
       messages: interpolatedMessages,
       apiKey,
-      config: {
-        temperature: input.temperature,
-        maxOutputTokens: input.maxOutputTokens,
-        topP: input.topP,
-        stopSequences: input.stopSequences,
-        customOptions: input.customOptions,
-      },
+      provider: input.provider,
+      temperature: input.temperature,
+      maxOutputTokens: input.maxOutputTokens,
+      topP: input.topP,
+      stopSequences: input.stopSequences,
+      tools: input.tools,
+      toolChoice: input.toolChoice,
       timeoutMs: input.timeoutMs,
       signal,
     })
 
     let collectedText = ''
     const scheduleTrace = this.scheduleTraceCreation.bind(this)
+    const buildAssistantMessage = this.buildAssistantMessage.bind(this)
 
     async function* wrappedChunks(): AsyncGenerator<string> {
       try {
@@ -314,7 +623,7 @@ export class Tracia {
           scheduleTrace(traceId, {
             traceId,
             model: input.model,
-            provider: adapter.provider,
+            provider: completionResult.provider,
             input: { messages: interpolatedMessages },
             variables: input.variables ?? null,
             output: completionResult.text,
@@ -330,8 +639,14 @@ export class Tracia {
             temperature: input.temperature,
             maxOutputTokens: input.maxOutputTokens,
             topP: input.topP,
+            tools: input.tools,
+            toolCalls: completionResult.toolCalls,
           })
         }
+
+        const toolCalls = completionResult.toolCalls
+        const finishReason = completionResult.finishReason
+        const message = buildAssistantMessage(completionResult.text, toolCalls)
 
         resolveResult!({
           text: completionResult.text,
@@ -343,9 +658,12 @@ export class Tracia {
             totalTokens: completionResult.totalTokens,
           },
           cost: null,
-          provider: adapter.provider,
+          provider: completionResult.provider,
           model: input.model,
           aborted: false,
+          toolCalls,
+          finishReason,
+          message,
         })
       } catch (error) {
         const latencyMs = Date.now() - startTime
@@ -360,7 +678,7 @@ export class Tracia {
           scheduleTrace(traceId, {
             traceId,
             model: input.model,
-            provider: adapter.provider,
+            provider,
             input: { messages: interpolatedMessages },
             variables: input.variables ?? null,
             output: collectedText || null,
@@ -380,6 +698,7 @@ export class Tracia {
         }
 
         if (isAborted) {
+          const abortedMessage = buildAssistantMessage(collectedText, [])
           resolveResult!({
             text: collectedText,
             traceId,
@@ -390,9 +709,12 @@ export class Tracia {
               totalTokens: 0,
             },
             cost: null,
-            provider: adapter.provider,
+            provider,
             model: input.model,
             aborted: true,
+            toolCalls: [],
+            finishReason: 'stop',
+            message: abortedMessage,
           })
         } else {
           const traciaError =
@@ -428,18 +750,14 @@ export class Tracia {
       return controller.signal
     }
 
-    const cleanup = () => {
+    const onAbort = () => {
       signal1.removeEventListener('abort', onAbort)
       signal2.removeEventListener('abort', onAbort)
-    }
-
-    const onAbort = () => {
-      cleanup()
       controller.abort()
     }
 
-    signal1.addEventListener('abort', onAbort)
-    signal2.addEventListener('abort', onAbort)
+    signal1.addEventListener('abort', onAbort, { once: true })
+    signal2.addEventListener('abort', onAbort, { once: true })
 
     return controller.signal
   }
@@ -461,6 +779,26 @@ export class Tracia {
         TraciaErrorCode.INVALID_REQUEST,
         'messages array is required and cannot be empty'
       )
+    }
+
+    for (const message of input.messages) {
+      if (message.role === 'tool') {
+        // Tool messages must have toolCallId and string content
+        if (!message.toolCallId) {
+          throw new TraciaError(
+            TraciaErrorCode.INVALID_REQUEST,
+            'Tool messages must include toolCallId. ' +
+              'Example: { role: "tool", toolCallId: "call_123", content: \'{"result": "data"}\' }'
+          )
+        }
+        if (typeof message.content !== 'string') {
+          throw new TraciaError(
+            TraciaErrorCode.INVALID_REQUEST,
+            'Tool message content must be a string (the tool result). ' +
+              'Example: { role: "tool", toolCallId: "call_123", content: \'{"result": "data"}\' }'
+          )
+        }
+      }
     }
   }
 
@@ -514,13 +852,60 @@ export class Tracia {
   ): LocalPromptMessage[] {
     if (!variables) return messages
 
-    return messages.map(message => ({
-      ...message,
-      content: message.content.replace(
-        /\{\{(\w+)\}\}/g,
-        (match, key) => variables[key] ?? match
-      ),
-    }))
+    return messages.map(message => {
+      if (typeof message.content === 'string') {
+        return {
+          ...message,
+          content: message.content.replace(
+            /\{\{(\w+)\}\}/g,
+            (match, key) => variables[key] ?? match
+          ),
+        }
+      }
+
+      if (message.role === 'tool') {
+        return message
+      }
+
+      return {
+        ...message,
+        content: message.content.map(block => {
+          if (block.type === 'text') {
+            return {
+              ...block,
+              text: block.text.replace(
+                /\{\{(\w+)\}\}/g,
+                (match, key) => variables[key] ?? match
+              ),
+            }
+          }
+          return block
+        }),
+      }
+    })
+  }
+
+  private buildAssistantMessage(text: string, toolCalls: ToolCall[]): LocalPromptMessage {
+    if (toolCalls.length === 0) {
+      return { role: 'assistant', content: text }
+    }
+
+    const contentParts: ContentPart[] = []
+
+    if (text) {
+      contentParts.push({ type: 'text', text })
+    }
+
+    for (const toolCall of toolCalls) {
+      contentParts.push({
+        type: 'tool_call',
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      })
+    }
+
+    return { role: 'assistant', content: contentParts }
   }
 
   private getProviderApiKey(provider: LLMProvider, override?: string): string {

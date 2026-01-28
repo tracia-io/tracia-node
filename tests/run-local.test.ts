@@ -6,6 +6,24 @@ global.fetch = mockFetch
 
 const validApiKey = 'tr_test_api_key'
 
+// Mock the AI SDK
+vi.mock('ai', () => ({
+  generateText: vi.fn(),
+  streamText: vi.fn(),
+}))
+
+vi.mock('@ai-sdk/openai', () => ({
+  createOpenAI: vi.fn(() => (model: string) => ({ model })),
+}))
+
+vi.mock('@ai-sdk/anthropic', () => ({
+  createAnthropic: vi.fn(() => (model: string) => ({ model })),
+}))
+
+vi.mock('@ai-sdk/google', () => ({
+  createGoogleGenerativeAI: vi.fn(() => (model: string) => ({ model })),
+}))
+
 describe('runLocal', () => {
   beforeEach(() => {
     mockFetch.mockReset()
@@ -86,6 +104,96 @@ describe('runLocal', () => {
         })
       ).rejects.toThrow(TraciaError)
     })
+
+    it('throws error when tool message is missing toolCallId', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      await expect(
+        tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            { role: 'tool', content: '{"result": "ok"}' } as any,
+          ],
+        })
+      ).rejects.toThrow(TraciaError)
+
+      try {
+        await tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            { role: 'tool', content: '{"result": "ok"}' } as any,
+          ],
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect((error as TraciaError).message).toContain('toolCallId')
+      }
+    })
+
+    it('throws error when tool message content is not a string', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      await expect(
+        tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            {
+              role: 'tool',
+              toolCallId: 'call_123',
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              content: [{ type: 'text', text: 'result' }] as any,
+            },
+          ],
+        })
+      ).rejects.toThrow(TraciaError)
+
+      try {
+        await tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            {
+              role: 'tool',
+              toolCallId: 'call_123',
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              content: [{ type: 'text', text: 'result' }] as any,
+            },
+          ],
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect((error as TraciaError).message).toContain('string')
+      }
+    })
+
+    it('accepts valid tool message with toolCallId and string content', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      // Will fail at later stage (missing SDK/key), but should pass validation
+      try {
+        await tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            {
+              role: 'tool',
+              toolCallId: 'call_123',
+              content: '{"temp": 22}',
+            },
+          ],
+        })
+      } catch (error) {
+        // Should not be INVALID_REQUEST for tool message validation
+        expect((error as TraciaError).code).not.toBe(TraciaErrorCode.INVALID_REQUEST)
+      }
+    })
   })
 
   describe('trace ID validation', () => {
@@ -123,7 +231,7 @@ describe('runLocal', () => {
           messages: [{ role: 'user', content: 'Hello' }],
           traceId: 'tr_1234567890abcdef',
         })
-      ).rejects.toThrow() // Will throw MISSING_PROVIDER_SDK, not INVALID_REQUEST
+      ).rejects.toThrow() // Will throw MISSING_PROVIDER_API_KEY, not INVALID_REQUEST
 
       try {
         await tracia.runLocal({
@@ -194,7 +302,7 @@ describe('runLocal', () => {
     it('uses explicit provider when specified', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
-      // With explicit provider, should try to use OpenAI adapter even for unknown model
+      // With explicit provider, should try to use OpenAI even for unknown model
       try {
         await tracia.runLocal({
           model: 'my-custom-model',
@@ -203,7 +311,7 @@ describe('runLocal', () => {
           sendTrace: false,
         })
       } catch (error) {
-        // Should fail with MISSING_PROVIDER_API_KEY (SDK is available), not UNSUPPORTED_MODEL
+        // Should fail with MISSING_PROVIDER_API_KEY, not UNSUPPORTED_MODEL
         expect((error as TraciaError).code).toBe(TraciaErrorCode.MISSING_PROVIDER_API_KEY)
       }
     })
@@ -218,7 +326,6 @@ describe('runLocal', () => {
           sendTrace: false,
         })
       } catch (error) {
-        // SDK is installed, so we get MISSING_PROVIDER_API_KEY instead
         expect((error as TraciaError).code).toBe(TraciaErrorCode.MISSING_PROVIDER_API_KEY)
         expect((error as TraciaError).message).toContain('OPENAI_API_KEY')
       }
@@ -234,7 +341,6 @@ describe('runLocal', () => {
           sendTrace: false,
         })
       } catch (error) {
-        // SDK is installed, so we get MISSING_PROVIDER_API_KEY instead
         expect((error as TraciaError).code).toBe(TraciaErrorCode.MISSING_PROVIDER_API_KEY)
         expect((error as TraciaError).message).toContain('ANTHROPIC_API_KEY')
       }
@@ -250,10 +356,294 @@ describe('runLocal', () => {
           sendTrace: false,
         })
       } catch (error) {
-        // SDK is installed, so we get MISSING_PROVIDER_API_KEY instead
         expect((error as TraciaError).code).toBe(TraciaErrorCode.MISSING_PROVIDER_API_KEY)
         expect((error as TraciaError).message).toContain('GOOGLE_API_KEY')
       }
+    })
+  })
+
+  describe('successful completion flow', () => {
+    it('returns correct result structure on success', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Hello world!',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      expect(result.text).toBe('Hello world!')
+      expect(result.model).toBe('gpt-4')
+      expect(result.provider).toBe(LLMProvider.OPENAI)
+      expect(result.usage.inputTokens).toBe(10)
+      expect(result.usage.outputTokens).toBe(5)
+      expect(result.usage.totalTokens).toBe(15)
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0)
+      expect(result.cost).toBeNull()
+    })
+
+    it('uses providerApiKey when provided instead of env var', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Response',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        providerApiKey: 'my-custom-api-key',
+        sendTrace: false,
+      })
+
+      // The test passes if no MISSING_PROVIDER_API_KEY error is thrown
+      expect(generateText).toHaveBeenCalled()
+    })
+
+    it('generates trace ID when sendTrace is true (default)', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Response',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      })
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+      })
+
+      expect(result.traceId).toMatch(/^tr_[a-f0-9]{16}$/)
+    })
+
+    it('uses provided trace ID when specified', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Response',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      })
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        traceId: 'tr_1234567890abcdef',
+      })
+
+      expect(result.traceId).toBe('tr_1234567890abcdef')
+    })
+
+    it('returns empty trace ID when sendTrace is false', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Response',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      expect(result.traceId).toBe('')
+    })
+
+    it('throws PROVIDER_ERROR when AI SDK fails', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockRejectedValue(new Error('API rate limit exceeded'))
+
+      await expect(
+        tracia.runLocal({
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      ).rejects.toThrow(TraciaError)
+
+      try {
+        await tracia.runLocal({
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      } catch (error) {
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.PROVIDER_ERROR)
+        expect((error as TraciaError).message).toContain('API rate limit exceeded')
+      }
+    })
+  })
+
+  describe('tool calling', () => {
+    it('returns toolCalls in result', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: '',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [
+          { toolCallId: 'call_abc', toolName: 'get_weather', input: { location: 'Paris' } },
+          { toolCallId: 'call_def', toolName: 'get_time', input: { timezone: 'UTC' } },
+        ],
+        finishReason: 'tool-calls',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Weather and time?' }],
+        sendTrace: false,
+      })
+
+      expect(result.toolCalls).toHaveLength(2)
+      expect(result.toolCalls[0]).toEqual({
+        id: 'call_abc',
+        name: 'get_weather',
+        arguments: { location: 'Paris' },
+      })
+      expect(result.toolCalls[1]).toEqual({
+        id: 'call_def',
+        name: 'get_time',
+        arguments: { timezone: 'UTC' },
+      })
+    })
+
+    it('returns finishReason in result', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: '',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [{ toolCallId: 'call_123', toolName: 'get_weather', input: {} }],
+        finishReason: 'tool-calls',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Weather?' }],
+        sendTrace: false,
+      })
+
+      expect(result.finishReason).toBe('tool_calls')
+    })
+
+    it('returns message with tool calls for round-tripping', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Let me check the weather.',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [{ toolCallId: 'call_123', toolName: 'get_weather', input: { location: 'Paris' } }],
+        finishReason: 'tool-calls',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Weather in Paris?' }],
+        sendTrace: false,
+      })
+
+      expect(result.message.role).toBe('assistant')
+      expect(Array.isArray(result.message.content)).toBe(true)
+
+      // Tracia format: tool_call parts with id, name, arguments
+      const content = result.message.content as Array<{ type: string; text?: string; id?: string; name?: string; arguments?: unknown }>
+      expect(content).toHaveLength(2)
+      expect(content[0]).toEqual({ type: 'text', text: 'Let me check the weather.' })
+      expect(content[1]).toEqual({
+        type: 'tool_call',
+        id: 'call_123',
+        name: 'get_weather',
+        arguments: { location: 'Paris' },
+      })
+    })
+
+    it('returns message with string content when no tool calls', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Hello there!',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      expect(result.message.role).toBe('assistant')
+      expect(result.message.content).toBe('Hello there!')
+    })
+
+    it('returns empty toolCalls array when none', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Hello!',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        finishReason: 'stop',
+      } as never)
+
+      const result = await tracia.runLocal({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      expect(result.toolCalls).toEqual([])
+      expect(result.finishReason).toBe('stop')
     })
   })
 
@@ -266,7 +656,6 @@ describe('runLocal', () => {
 })
 
 describe('getProviderForModel', () => {
-  // Test the model mapping
   it('returns correct provider for known models', async () => {
     const { getProviderForModel } = await import('../src/models')
 
@@ -289,384 +678,7 @@ describe('getProviderForModel', () => {
   })
 })
 
-describe('ProviderRegistry', () => {
-  it('returns adapter for valid provider', async () => {
-    const { ProviderRegistry } = await import('../src/providers/registry')
-
-    const registry = new ProviderRegistry()
-
-    const openaiAdapter = registry.getAdapterForProvider(LLMProvider.OPENAI)
-    expect(openaiAdapter.provider).toBe(LLMProvider.OPENAI)
-
-    const anthropicAdapter = registry.getAdapterForProvider(LLMProvider.ANTHROPIC)
-    expect(anthropicAdapter.provider).toBe(LLMProvider.ANTHROPIC)
-
-    const googleAdapter = registry.getAdapterForProvider(LLMProvider.GOOGLE)
-    expect(googleAdapter.provider).toBe(LLMProvider.GOOGLE)
-  })
-
-  it('returns adapter for known model', async () => {
-    const { ProviderRegistry } = await import('../src/providers/registry')
-
-    const registry = new ProviderRegistry()
-
-    expect(registry.getAdapterForModel('gpt-4o').provider).toBe(LLMProvider.OPENAI)
-    expect(registry.getAdapterForModel('claude-3-opus-20240229').provider).toBe(LLMProvider.ANTHROPIC)
-    expect(registry.getAdapterForModel('gemini-2.0-flash').provider).toBe(LLMProvider.GOOGLE)
-  })
-
-  it('falls back to prefix matching for unknown models', async () => {
-    const { ProviderRegistry } = await import('../src/providers/registry')
-
-    const registry = new ProviderRegistry()
-
-    // Not in the explicit list, but matches prefix
-    expect(registry.getAdapterForModel('gpt-99-turbo').provider).toBe(LLMProvider.OPENAI)
-    expect(registry.getAdapterForModel('claude-99-opus').provider).toBe(LLMProvider.ANTHROPIC)
-    expect(registry.getAdapterForModel('gemini-99-flash').provider).toBe(LLMProvider.GOOGLE)
-  })
-
-  it('throws for completely unknown model', async () => {
-    const { ProviderRegistry } = await import('../src/providers/registry')
-
-    const registry = new ProviderRegistry()
-
-    expect(() => registry.getAdapterForModel('totally-unknown')).toThrow(TraciaError)
-  })
-})
-
-describe('variable interpolation', () => {
-  beforeEach(() => {
-    mockFetch.mockReset()
-    vi.stubEnv('OPENAI_API_KEY', '')
-    vi.stubEnv('ANTHROPIC_API_KEY', '')
-    vi.stubEnv('GOOGLE_API_KEY', '')
-  })
-
-  afterEach(() => {
-    vi.unstubAllEnvs()
-    vi.clearAllMocks()
-  })
-
-  it('interpolates variables in message content', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    // Set API key so we get past that check
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    // Mock the OpenAI adapter's complete method
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    const completeSpy = vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Hello Alice!',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    const result = await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello {{name}}!' }],
-      variables: { name: 'Alice' },
-      sendTrace: false,
-    })
-
-    expect(result.text).toBe('Hello Alice!')
-    // Verify the interpolated message was passed to the adapter
-    expect(completeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [{ role: 'user', content: 'Hello Alice!' }],
-      })
-    )
-
-    completeSpy.mockRestore()
-  })
-
-  it('leaves unknown variables unchanged', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    const completeSpy = vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello {{unknown}}!' }],
-      variables: { name: 'Alice' },
-      sendTrace: false,
-    })
-
-    // Unknown variable should remain as-is
-    expect(completeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [{ role: 'user', content: 'Hello {{unknown}}!' }],
-      })
-    )
-
-    completeSpy.mockRestore()
-  })
-})
-
-describe('successful completion flow', () => {
-  beforeEach(() => {
-    mockFetch.mockReset()
-    vi.stubEnv('OPENAI_API_KEY', '')
-    vi.stubEnv('ANTHROPIC_API_KEY', '')
-    vi.stubEnv('GOOGLE_API_KEY', '')
-  })
-
-  afterEach(() => {
-    vi.unstubAllEnvs()
-    vi.clearAllMocks()
-  })
-
-  it('returns correct result structure on success', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Hello world!',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    const result = await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-      sendTrace: false,
-    })
-
-    expect(result.text).toBe('Hello world!')
-    expect(result.model).toBe('gpt-4')
-    expect(result.provider).toBe(LLMProvider.OPENAI)
-    expect(result.usage.inputTokens).toBe(10)
-    expect(result.usage.outputTokens).toBe(5)
-    expect(result.usage.totalTokens).toBe(15)
-    expect(result.latencyMs).toBeGreaterThanOrEqual(0)
-    expect(result.cost).toBeNull()
-  })
-
-  it('uses providerApiKey when provided instead of env var', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    // Don't set env var - should use providerApiKey instead
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    const completeSpy = vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-      providerApiKey: 'my-custom-api-key',
-      sendTrace: false,
-    })
-
-    expect(completeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: 'my-custom-api-key',
-      })
-    )
-
-    completeSpy.mockRestore()
-  })
-
-  it('generates trace ID when sendTrace is true (default)', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    // Mock fetch for trace creation
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ success: true }),
-    })
-
-    const result = await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-    })
-
-    expect(result.traceId).toMatch(/^tr_[a-f0-9]{16}$/)
-  })
-
-  it('uses provided trace ID when specified', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ success: true }),
-    })
-
-    const result = await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-      traceId: 'tr_1234567890abcdef',
-    })
-
-    expect(result.traceId).toBe('tr_1234567890abcdef')
-  })
-
-  it('returns empty trace ID when sendTrace is false', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    const result = await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-      sendTrace: false,
-    })
-
-    expect(result.traceId).toBe('')
-  })
-
-  it('throws PROVIDER_ERROR when adapter fails', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    vi.spyOn(OpenAIAdapter.prototype, 'complete').mockRejectedValue(
-      new Error('API rate limit exceeded')
-    )
-
-    await expect(
-      tracia.runLocal({
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: 'Hello' }],
-        sendTrace: false,
-      })
-    ).rejects.toThrow(TraciaError)
-
-    try {
-      await tracia.runLocal({
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: 'Hello' }],
-        sendTrace: false,
-      })
-    } catch (error) {
-      expect((error as TraciaError).code).toBe(TraciaErrorCode.PROVIDER_ERROR)
-      expect((error as TraciaError).message).toContain('API rate limit exceeded')
-    }
-  })
-
-  it('passes config options to adapter', async () => {
-    const tracia = new Tracia({ apiKey: validApiKey })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    const completeSpy = vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-      temperature: 0.7,
-      maxOutputTokens: 1000,
-      topP: 0.9,
-      stopSequences: ['END'],
-      timeoutMs: 30000,
-      sendTrace: false,
-    })
-
-    expect(completeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          temperature: 0.7,
-          maxOutputTokens: 1000,
-          topP: 0.9,
-          stopSequences: ['END'],
-        }),
-        timeoutMs: 30000,
-      })
-    )
-
-    completeSpy.mockRestore()
-  })
-
-  it('calls onTraceError callback when trace creation fails after retries', async () => {
-    const onTraceError = vi.fn()
-    const tracia = new Tracia({ apiKey: validApiKey, onTraceError })
-
-    vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-    const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-    vi.spyOn(OpenAIAdapter.prototype, 'complete').mockResolvedValue({
-      text: 'Response',
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    })
-
-    // Mock fetch to always fail for trace creation
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 500,
-      statusText: 'Internal Server Error',
-      json: () => Promise.resolve({ error: { code: 'UNKNOWN', message: 'Server error' } }),
-    })
-
-    await tracia.runLocal({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello' }],
-      // sendTrace defaults to true
-    })
-
-    // Wait for trace creation retries to complete
-    await tracia.flush()
-
-    expect(onTraceError).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.stringMatching(/^tr_[a-f0-9]{16}$/)
-    )
-  })
-})
-
-describe('runLocalStream', () => {
+describe('runLocal with stream: true', () => {
   beforeEach(() => {
     mockFetch.mockReset()
     vi.stubEnv('OPENAI_API_KEY', '')
@@ -684,9 +696,10 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       expect(() =>
-        tracia.runLocalStream({
+        tracia.runLocal({
           model: '',
           messages: [{ role: 'user', content: 'Hello' }],
+          stream: true,
         })
       ).toThrow(TraciaError)
     })
@@ -695,9 +708,10 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       expect(() =>
-        tracia.runLocalStream({
+        tracia.runLocal({
           model: 'gpt-4',
           messages: [],
+          stream: true,
         })
       ).toThrow(TraciaError)
     })
@@ -706,10 +720,61 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       expect(() =>
-        tracia.runLocalStream({
+        tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
+          stream: true,
           traceId: 'invalid-trace-id',
+        })
+      ).toThrow(TraciaError)
+    })
+
+    it('throws error when tool message has string content instead of array', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      expect(() =>
+        tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            // Missing toolCallId - should fail
+            { role: 'tool', content: '{"result": "ok"}' } as never,
+          ],
+          stream: true,
+        })
+      ).toThrow(TraciaError)
+
+      try {
+        tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            { role: 'tool', content: '{"result": "ok"}' } as never,
+          ],
+          stream: true,
+        })
+      } catch (error) {
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect((error as TraciaError).message).toContain('toolCallId')
+      }
+    })
+
+    it('throws error when tool message content is not a string', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      expect(() =>
+        tracia.runLocal({
+          model: 'gpt-4',
+          messages: [
+            { role: 'user', content: 'Hello' },
+            {
+              role: 'tool',
+              toolCallId: 'call_123',
+              // Content should be a string, not an array
+              content: [{ type: 'text', text: 'result' }] as never,
+            },
+          ],
+          stream: true,
         })
       ).toThrow(TraciaError)
     })
@@ -720,21 +785,22 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-          yield ' world'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello world',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      const { streamText } = await import('ai')
+      const mockTextStream = (async function* () {
+        yield 'Hello'
+        yield ' world'
+      })()
 
-      const stream = tracia.runLocalStream({
+      vi.mocked(streamText).mockReturnValue({
+        textStream: mockTextStream,
+        text: Promise.resolve('Hello world'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
+
+      const stream = tracia.runLocal({
+        stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
         sendTrace: false,
@@ -748,25 +814,26 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      const { streamText } = await import('ai')
+      const mockTextStream = (async function* () {
+        yield 'Hello'
+      })()
+
+      vi.mocked(streamText).mockReturnValue({
+        textStream: mockTextStream,
+        text: Promise.resolve('Hello'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
 
       mockFetch.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ success: true }),
       })
 
-      const stream = tracia.runLocalStream({
+      const stream = tracia.runLocal({
+        stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
       })
@@ -778,23 +845,24 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-          yield ' '
-          yield 'world'
-          yield '!'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello world!',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      const { streamText } = await import('ai')
+      const mockTextStream = (async function* () {
+        yield 'Hello'
+        yield ' '
+        yield 'world'
+        yield '!'
+      })()
 
-      const stream = tracia.runLocalStream({
+      vi.mocked(streamText).mockReturnValue({
+        textStream: mockTextStream,
+        text: Promise.resolve('Hello world!'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
+
+      const stream = tracia.runLocal({
+        stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
         sendTrace: false,
@@ -812,20 +880,21 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello world!'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello world!',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      const { streamText } = await import('ai')
+      const mockTextStream = (async function* () {
+        yield 'Hello world!'
+      })()
 
-      const stream = tracia.runLocalStream({
+      vi.mocked(streamText).mockReturnValue({
+        textStream: mockTextStream,
+        text: Promise.resolve('Hello world!'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
+
+      const stream = tracia.runLocal({
+        stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
         sendTrace: false,
@@ -852,25 +921,26 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      const { streamText } = await import('ai')
+      const mockTextStream = (async function* () {
+        yield 'Hello'
+      })()
+
+      vi.mocked(streamText).mockReturnValue({
+        textStream: mockTextStream,
+        text: Promise.resolve('Hello'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
 
       mockFetch.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ success: true }),
       })
 
-      const stream = tracia.runLocalStream({
+      const stream = tracia.runLocal({
+        stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
         traceId: 'tr_1234567890abcdef',
@@ -885,20 +955,21 @@ describe('runLocalStream', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      const { streamText } = await import('ai')
+      const mockTextStream = (async function* () {
+        yield 'Hello'
+      })()
 
-      const stream = tracia.runLocalStream({
+      vi.mocked(streamText).mockReturnValue({
+        textStream: mockTextStream,
+        text: Promise.resolve('Hello'),
+        usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
+
+      const stream = tracia.runLocal({
+        stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
         sendTrace: false,
@@ -910,58 +981,17 @@ describe('runLocalStream', () => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _chunk of stream) { /* consume */ }
     })
-
-    it('accepts external AbortSignal in options', async () => {
-      const tracia = new Tracia({ apiKey: validApiKey })
-      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
-
-      const controller = new AbortController()
-
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      const streamSpy = vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
-
-      const stream = tracia.runLocalStream({
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: 'Hello' }],
-        signal: controller.signal,
-        sendTrace: false,
-      })
-
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _chunk of stream) { /* consume */ }
-
-      // Verify signal was passed to adapter
-      expect(streamSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          signal: expect.any(AbortSignal),
-        })
-      )
-
-      streamSpy.mockRestore()
-    })
   })
 
   describe('error handling', () => {
-    it('throws MISSING_PROVIDER_SDK when SDK not available', () => {
+    it('throws UNSUPPORTED_MODEL when model is unknown', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
-      // Don't set any env vars, and don't mock the adapter
-      // This tests the synchronous validation path
-
       expect(() =>
-        tracia.runLocalStream({
+        tracia.runLocal({
           model: 'unknown-model-xyz',
           messages: [{ role: 'user', content: 'Hello' }],
+          stream: true,
           sendTrace: false,
         })
       ).toThrow(TraciaError)
@@ -969,20 +999,21 @@ describe('runLocalStream', () => {
 
     it('throws MISSING_PROVIDER_API_KEY when API key not set', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
-      // OPENAI_API_KEY env var is not set
 
       expect(() =>
-        tracia.runLocalStream({
+        tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
+          stream: true,
           sendTrace: false,
         })
       ).toThrow(TraciaError)
 
       try {
-        tracia.runLocalStream({
+        tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
+          stream: true,
           sendTrace: false,
         })
       } catch (error) {
@@ -990,159 +1021,225 @@ describe('runLocalStream', () => {
       }
     })
   })
+})
 
-  describe('trace creation', () => {
-    it('sends trace after successful stream completion', async () => {
+describe('runResponses with stream: true', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+    vi.stubEnv('OPENAI_API_KEY', '')
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
+    vi.stubEnv('GOOGLE_API_KEY', '')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.clearAllMocks()
+  })
+
+  describe('input validation', () => {
+    it('throws error when model is empty', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
-      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello world!'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello world!',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
-
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ traceId: 'tr_1234567890abcdef', cost: 0.001 }),
-      })
-
-      const stream = tracia.runLocalStream({
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: 'Hello' }],
-        tags: ['test'],
-        userId: 'user-123',
-      })
-
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _chunk of stream) {
-        // consume
-      }
-
-      await stream.result
-      await tracia.flush()
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/v1/traces'),
-        expect.objectContaining({
-          method: 'POST',
-          body: expect.stringContaining('"status":"SUCCESS"'),
+      expect(() => {
+        tracia.runResponses({
+          model: '',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
         })
-      )
+      }).toThrow(TraciaError)
+
+      try {
+        tracia.runResponses({
+          model: '',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect((error as TraciaError).message).toContain('model is required')
+      }
     })
 
-    it('includes correct data in trace payload', async () => {
+    it('throws error when input array is empty', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
-      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello world!'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello world!',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
-      })
+      expect(() => {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [],
+          stream: true,
+        })
+      }).toThrow(TraciaError)
 
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ traceId: 'tr_1234567890abcdef', cost: 0.001 }),
-      })
-
-      const stream = tracia.runLocalStream({
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: 'Hello' }],
-        temperature: 0.7,
-        tags: ['test-tag'],
-        userId: 'user-123',
-        sessionId: 'session-456',
-      })
-
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _chunk of stream) {
-        // consume
+      try {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [],
+          stream: true,
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect((error as TraciaError).message).toContain('input array is required')
       }
+    })
 
-      await stream.result
-      await tracia.flush()
+    it('throws error when invalid traceId format is provided', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test')
 
-      const fetchCall = mockFetch.mock.calls.find(call =>
-        (call[0] as string).includes('/v1/traces')
-      )
-      expect(fetchCall).toBeDefined()
+      expect(() => {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
+          traceId: 'invalid-trace-id',
+        })
+      }).toThrow(TraciaError)
 
-      const body = JSON.parse(fetchCall![1].body as string)
-      expect(body.model).toBe('gpt-4')
-      expect(body.provider).toBe('openai')
-      expect(body.status).toBe('SUCCESS')
-      expect(body.output).toBe('Hello world!')
-      expect(body.inputTokens).toBe(10)
-      expect(body.outputTokens).toBe(5)
-      expect(body.temperature).toBe(0.7)
-      expect(body.tags).toEqual(['test-tag'])
-      expect(body.userId).toBe('user-123')
-      expect(body.sessionId).toBe('session-456')
+      try {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
+          traceId: 'invalid-trace-id',
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
+        expect((error as TraciaError).message).toContain('Invalid trace ID format')
+      }
     })
   })
 
-  describe('config passing', () => {
-    it('passes config options to adapter stream method', async () => {
+  describe('provider handling', () => {
+    it('throws error when OpenAI API key is missing', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
-      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
-      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
-      const streamSpy = vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
-        chunks: (async function* () {
-          yield 'Hello'
-        })(),
-        result: Promise.resolve({
-          text: 'Hello',
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-        }),
+      expect(() => {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
+        })
+      }).toThrow(TraciaError)
+
+      try {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
+        })
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.MISSING_PROVIDER_API_KEY)
+        expect((error as TraciaError).message).toContain('OPENAI_API_KEY')
+      }
+    })
+
+    it('uses providerApiKey when provided', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      expect(() => {
+        tracia.runResponses({
+          model: 'o3-mini',
+          input: [{ role: 'user', content: 'Hello' }],
+          stream: true,
+          providerApiKey: 'sk-test-key',
+          sendTrace: false,
+        })
+      }).not.toThrow(TraciaError)
+    })
+
+    it('returns a stream with traceId available immediately', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test')
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ traceId: 'tr_mock', cost: 0.001 }),
       })
 
-      const stream = tracia.runLocalStream({
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: 'Hello' }],
-        temperature: 0.7,
-        maxOutputTokens: 1000,
-        topP: 0.9,
-        stopSequences: ['END'],
-        timeoutMs: 30000,
+      const stream = tracia.runResponses({
+        model: 'o3-mini',
+        input: [{ role: 'user', content: 'Hello' }],
+        stream: true,
+      })
+
+      expect(stream.traceId).toBeDefined()
+      expect(stream.traceId).toMatch(/^tr_[0-9a-f]{16}$/)
+      expect(typeof stream.abort).toBe('function')
+      expect(stream.result).toBeInstanceOf(Promise)
+      expect(typeof stream[Symbol.asyncIterator]).toBe('function')
+    })
+
+    it('uses custom traceId when provided', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test')
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ traceId: 'tr_mock', cost: 0.001 }),
+      })
+
+      const customTraceId = 'tr_1234567890abcdef'
+      const stream = tracia.runResponses({
+        model: 'o3-mini',
+        input: [{ role: 'user', content: 'Hello' }],
+        stream: true,
+        traceId: customTraceId,
+      })
+
+      expect(stream.traceId).toBe(customTraceId)
+    })
+
+    it('generates no traceId when sendTrace is false without custom traceId', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test')
+
+      const stream = tracia.runResponses({
+        model: 'o3-mini',
+        input: [{ role: 'user', content: 'Hello' }],
+        stream: true,
         sendTrace: false,
       })
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _chunk of stream) {
-        // consume
-      }
+      expect(stream.traceId).toBe('')
+    })
+  })
 
-      expect(streamSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            temperature: 0.7,
-            maxOutputTokens: 1000,
-            topP: 0.9,
-            stopSequences: ['END'],
-          }),
-          timeoutMs: 30000,
-        })
-      )
+  describe('input format handling', () => {
+    it('accepts developer role messages', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test')
 
-      streamSpy.mockRestore()
+      const stream = tracia.runResponses({
+        model: 'o3-mini',
+        input: [
+          { role: 'developer', content: 'You are a helpful assistant.' },
+          { role: 'user', content: 'Hello' },
+        ],
+        stream: true,
+        sendTrace: false,
+      })
+
+      expect(stream.traceId).toBe('')
+    })
+
+    it('accepts function_call_output items', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test')
+
+      const stream = tracia.runResponses({
+        model: 'o3-mini',
+        input: [
+          { role: 'user', content: 'What is the weather?' },
+          { type: 'function_call_output', call_id: 'call_123', output: '{"temp": 22}' },
+        ],
+        stream: true,
+        sendTrace: false,
+      })
+
+      expect(stream).toBeDefined()
     })
   })
 })

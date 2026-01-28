@@ -1,10 +1,13 @@
-export { ProviderRegistry } from './registry'
-export { OpenAIAdapter } from './openai-adapter'
-export { AnthropicAdapter } from './anthropic-adapter'
-export { GoogleAdapter } from './google-adapter'
-export type {
-  LLMProviderAdapter,
-  LLMConfig,
-  ProviderCompletionOptions,
-  ProviderCompletionResult,
-} from './types'
+export {
+  complete,
+  stream,
+  responsesStream,
+  resolveProvider,
+  type CompletionOptions,
+  type CompletionResult,
+  type StreamOptions,
+  type StreamResult,
+  type ResponsesOptions,
+  type ResponsesResult,
+  type ResponsesStreamResult,
+} from './ai-sdk'
