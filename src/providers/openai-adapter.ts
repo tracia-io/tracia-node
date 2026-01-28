@@ -4,6 +4,8 @@ import {
   LLMProviderAdapter,
   ProviderCompletionOptions,
   ProviderCompletionResult,
+  ProviderStreamOptions,
+  ProviderStreamResult,
 } from './types'
 
 const SUPPORTED_MODEL_PREFIXES = ['gpt-', 'o1-', 'o3-']
@@ -62,12 +64,93 @@ export class OpenAIAdapter implements LLMProviderAdapter {
     }
   }
 
+  stream(options: ProviderStreamOptions): ProviderStreamResult {
+    const safeCustomOptions = this.filterCustomOptions(options.config.customOptions)
+
+    let resolveResult: (result: ProviderCompletionResult) => void
+    let rejectResult: (error: Error) => void
+    const resultPromise = new Promise<ProviderCompletionResult>((resolve, reject) => {
+      resolveResult = resolve
+      rejectResult = reject
+    })
+
+    const loadSdk = this.loadSdk.bind(this)
+    async function* generateChunks(): AsyncGenerator<string> {
+      let fullText = ''
+      let inputTokens = 0
+      let outputTokens = 0
+
+      try {
+        const OpenAI = await loadSdk()
+        const client = new OpenAI({
+          apiKey: options.apiKey,
+          timeout: options.timeoutMs,
+        })
+
+        const stream = await client.chat.completions.create(
+          {
+            ...safeCustomOptions,
+            model: options.model,
+            messages: options.messages,
+            temperature: options.config.temperature,
+            max_completion_tokens: options.config.maxOutputTokens,
+            top_p: options.config.topP,
+            stop: options.config.stopSequences,
+            stream: true,
+            stream_options: { include_usage: true },
+          },
+          options.signal ? { signal: options.signal } : undefined
+        )
+
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content
+          if (content) {
+            fullText += content
+            yield content
+          }
+
+          if (chunk.usage) {
+            inputTokens = chunk.usage.prompt_tokens ?? 0
+            outputTokens = chunk.usage.completion_tokens ?? 0
+          }
+        }
+
+        resolveResult!({
+          text: fullText,
+          inputTokens,
+          outputTokens,
+          totalTokens: inputTokens + outputTokens,
+        })
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          const traciaError = new TraciaError(
+            TraciaErrorCode.ABORTED,
+            'Stream aborted'
+          )
+          rejectResult!(traciaError)
+          throw traciaError
+        }
+        const traciaError = new TraciaError(
+          TraciaErrorCode.PROVIDER_ERROR,
+          `OpenAI error: ${error instanceof Error ? error.message : String(error)}`
+        )
+        rejectResult!(traciaError)
+        throw traciaError
+      }
+    }
+
+    return {
+      chunks: generateChunks(),
+      result: resultPromise,
+    }
+  }
+
   private filterCustomOptions(
     customOptions?: Record<string, unknown>
   ): Record<string, unknown> {
     if (!customOptions) return {}
 
-    const reservedKeys = ['model', 'messages', 'temperature', 'max_completion_tokens', 'top_p', 'stop']
+    const reservedKeys = ['model', 'messages', 'temperature', 'max_completion_tokens', 'top_p', 'stop', 'stream', 'stream_options']
     const filtered: Record<string, unknown> = {}
 
     for (const [key, value] of Object.entries(customOptions)) {

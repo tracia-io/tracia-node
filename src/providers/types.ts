@@ -23,9 +23,19 @@ export interface ProviderCompletionResult {
   totalTokens: number
 }
 
+export interface ProviderStreamOptions extends ProviderCompletionOptions {
+  signal?: AbortSignal
+}
+
+export interface ProviderStreamResult {
+  chunks: AsyncIterable<string>
+  result: Promise<ProviderCompletionResult>
+}
+
 export interface LLMProviderAdapter {
   readonly provider: LLMProvider
   isAvailable(): boolean
   supportsModel(modelId: string): boolean
   complete(options: ProviderCompletionOptions): Promise<ProviderCompletionResult>
+  stream(options: ProviderStreamOptions): ProviderStreamResult
 }

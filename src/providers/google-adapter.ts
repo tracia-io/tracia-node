@@ -4,6 +4,8 @@ import {
   LLMProviderAdapter,
   ProviderCompletionOptions,
   ProviderCompletionResult,
+  ProviderStreamOptions,
+  ProviderStreamResult,
 } from './types'
 
 const SUPPORTED_MODEL_PREFIXES = ['gemini-']
@@ -88,6 +90,91 @@ export class GoogleAdapter implements LLMProviderAdapter {
       if (timeoutId) {
         clearTimeout(timeoutId)
       }
+    }
+  }
+
+  stream(options: ProviderStreamOptions): ProviderStreamResult {
+    const { systemInstruction, contents } = this.convertMessages(options.messages)
+
+    if (contents.length === 0) {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'Google AI requires at least one user or assistant message'
+      )
+    }
+
+    const safeCustomOptions = this.filterCustomOptions(options.config.customOptions)
+
+    let resolveResult: (result: ProviderCompletionResult) => void
+    let rejectResult: (error: Error) => void
+    const resultPromise = new Promise<ProviderCompletionResult>((resolve, reject) => {
+      resolveResult = resolve
+      rejectResult = reject
+    })
+
+    const loadSdk = this.loadSdk.bind(this)
+    async function* generateChunks(): AsyncGenerator<string> {
+      let fullText = ''
+
+      try {
+        const { GoogleGenerativeAI } = await loadSdk()
+        const genAI = new GoogleGenerativeAI(options.apiKey)
+
+        const model = genAI.getGenerativeModel({
+          model: options.model,
+          systemInstruction,
+          generationConfig: {
+            ...safeCustomOptions,
+            temperature: options.config.temperature,
+            maxOutputTokens: options.config.maxOutputTokens,
+            topP: options.config.topP,
+            stopSequences: options.config.stopSequences,
+          },
+        })
+
+        const result = await model.generateContentStream(
+          { contents },
+          options.signal ? { signal: options.signal } : undefined
+        )
+
+        for await (const chunk of result.stream) {
+          const text = chunk.text()
+          if (text) {
+            fullText += text
+            yield text
+          }
+        }
+
+        const response = await result.response
+        const usageMetadata = response.usageMetadata
+
+        resolveResult!({
+          text: fullText,
+          inputTokens: usageMetadata?.promptTokenCount ?? 0,
+          outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
+          totalTokens: usageMetadata?.totalTokenCount ?? 0,
+        })
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          const traciaError = new TraciaError(
+            TraciaErrorCode.ABORTED,
+            'Stream aborted'
+          )
+          rejectResult!(traciaError)
+          throw traciaError
+        }
+        const traciaError = new TraciaError(
+          TraciaErrorCode.PROVIDER_ERROR,
+          `Google AI error: ${error instanceof Error ? error.message : String(error)}`
+        )
+        rejectResult!(traciaError)
+        throw traciaError
+      }
+    }
+
+    return {
+      chunks: generateChunks(),
+      result: resultPromise,
     }
   }
 

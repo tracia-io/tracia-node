@@ -40,6 +40,7 @@ export enum TraciaErrorCode {
   INVALID_REQUEST = 'INVALID_REQUEST',
   NETWORK_ERROR = 'NETWORK_ERROR',
   TIMEOUT = 'TIMEOUT',
+  ABORTED = 'ABORTED',
   UNKNOWN = 'UNKNOWN',
   MISSING_PROVIDER_SDK = 'MISSING_PROVIDER_SDK',
   MISSING_PROVIDER_API_KEY = 'MISSING_PROVIDER_API_KEY',
@@ -265,4 +266,68 @@ export interface CreateTracePayload {
 export interface CreateTraceResult {
   traceId: string
   cost: number | null
+}
+
+// Streaming types for runLocalStream
+
+/**
+ * Input options for streaming LLM calls via runLocalStream().
+ */
+export interface RunLocalStreamInput extends RunLocalInput {
+  /** AbortSignal to cancel the stream */
+  signal?: AbortSignal
+}
+
+/**
+ * Final result returned after a stream completes.
+ * Includes all fields from RunLocalResult plus abort status.
+ */
+export interface StreamResult extends RunLocalResult {
+  /** Whether the stream was aborted before completion */
+  aborted: boolean
+}
+
+/**
+ * A streaming response from runLocalStream().
+ *
+ * @example
+ * ```typescript
+ * const stream = tracia.runLocalStream({
+ *   model: 'gpt-4o',
+ *   messages: [{ role: 'user', content: 'Write a haiku' }],
+ * })
+ *
+ * // traceId is available immediately
+ * console.log('Trace:', stream.traceId)
+ *
+ * // Iterate over text chunks as they arrive
+ * for await (const chunk of stream) {
+ *   process.stdout.write(chunk)
+ * }
+ *
+ * // Get final result with usage stats after iteration completes
+ * const result = await stream.result
+ * console.log(result.usage)
+ * ```
+ *
+ * @remarks
+ * - You must iterate over the stream for the result promise to resolve
+ * - Calling abort() will stop the stream and resolve result with aborted: true
+ * - The stream can only be iterated once
+ */
+export interface LocalStream {
+  /** Trace ID for this request, available immediately */
+  readonly traceId: string
+
+  /** Async iterator yielding text chunks */
+  [Symbol.asyncIterator](): AsyncIterator<string>
+
+  /**
+   * Promise that resolves to the final result after stream completes.
+   * Only resolves after the stream has been fully iterated or aborted.
+   */
+  readonly result: Promise<StreamResult>
+
+  /** Abort the stream. The result promise will resolve with aborted: true */
+  abort(): void
 }

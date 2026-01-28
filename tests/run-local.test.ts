@@ -665,3 +665,484 @@ describe('successful completion flow', () => {
     )
   })
 })
+
+describe('runLocalStream', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+    vi.stubEnv('OPENAI_API_KEY', '')
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
+    vi.stubEnv('GOOGLE_API_KEY', '')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.clearAllMocks()
+  })
+
+  describe('input validation', () => {
+    it('throws error when model is empty', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      expect(() =>
+        tracia.runLocalStream({
+          model: '',
+          messages: [{ role: 'user', content: 'Hello' }],
+        })
+      ).toThrow(TraciaError)
+    })
+
+    it('throws error when messages array is empty', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      expect(() =>
+        tracia.runLocalStream({
+          model: 'gpt-4',
+          messages: [],
+        })
+      ).toThrow(TraciaError)
+    })
+
+    it('throws error for invalid trace ID format', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      expect(() =>
+        tracia.runLocalStream({
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: 'Hello' }],
+          traceId: 'invalid-trace-id',
+        })
+      ).toThrow(TraciaError)
+    })
+  })
+
+  describe('stream behavior', () => {
+    it('returns stream with traceId immediately available', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+          yield ' world'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello world',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      // traceId should be empty when sendTrace is false
+      expect(stream.traceId).toBe('')
+    })
+
+    it('generates trace ID when sendTrace is true', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+      })
+
+      expect(stream.traceId).toMatch(/^tr_[a-f0-9]{16}$/)
+    })
+
+    it('yields chunks correctly', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+          yield ' '
+          yield 'world'
+          yield '!'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello world!',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      const chunks: string[] = []
+      for await (const chunk of stream) {
+        chunks.push(chunk)
+      }
+
+      expect(chunks).toEqual(['Hello', ' ', 'world', '!'])
+    })
+
+    it('resolves result with correct data after iteration', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello world!'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello world!',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of stream) {
+        // consume stream
+      }
+
+      const result = await stream.result
+
+      expect(result.text).toBe('Hello world!')
+      expect(result.model).toBe('gpt-4')
+      expect(result.provider).toBe(LLMProvider.OPENAI)
+      expect(result.usage.inputTokens).toBe(10)
+      expect(result.usage.outputTokens).toBe(5)
+      expect(result.usage.totalTokens).toBe(15)
+      expect(result.aborted).toBe(false)
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0)
+    })
+
+    it('uses provided trace ID when specified', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        traceId: 'tr_1234567890abcdef',
+      })
+
+      expect(stream.traceId).toBe('tr_1234567890abcdef')
+    })
+  })
+
+  describe('abort behavior', () => {
+    it('stream has abort method', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      expect(typeof stream.abort).toBe('function')
+
+      // Consume to avoid hanging
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of stream) { /* consume */ }
+    })
+
+    it('accepts external AbortSignal in options', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const controller = new AbortController()
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      const streamSpy = vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        signal: controller.signal,
+        sendTrace: false,
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of stream) { /* consume */ }
+
+      // Verify signal was passed to adapter
+      expect(streamSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        })
+      )
+
+      streamSpy.mockRestore()
+    })
+  })
+
+  describe('error handling', () => {
+    it('throws MISSING_PROVIDER_SDK when SDK not available', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+
+      // Don't set any env vars, and don't mock the adapter
+      // This tests the synchronous validation path
+
+      expect(() =>
+        tracia.runLocalStream({
+          model: 'unknown-model-xyz',
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      ).toThrow(TraciaError)
+    })
+
+    it('throws MISSING_PROVIDER_API_KEY when API key not set', () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      // OPENAI_API_KEY env var is not set
+
+      expect(() =>
+        tracia.runLocalStream({
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      ).toThrow(TraciaError)
+
+      try {
+        tracia.runLocalStream({
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      } catch (error) {
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.MISSING_PROVIDER_API_KEY)
+      }
+    })
+  })
+
+  describe('trace creation', () => {
+    it('sends trace after successful stream completion', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello world!'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello world!',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ traceId: 'tr_1234567890abcdef', cost: 0.001 }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        tags: ['test'],
+        userId: 'user-123',
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of stream) {
+        // consume
+      }
+
+      await stream.result
+      await tracia.flush()
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/v1/traces'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"status":"SUCCESS"'),
+        })
+      )
+    })
+
+    it('includes correct data in trace payload', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello world!'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello world!',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ traceId: 'tr_1234567890abcdef', cost: 0.001 }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        temperature: 0.7,
+        tags: ['test-tag'],
+        userId: 'user-123',
+        sessionId: 'session-456',
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of stream) {
+        // consume
+      }
+
+      await stream.result
+      await tracia.flush()
+
+      const fetchCall = mockFetch.mock.calls.find(call =>
+        (call[0] as string).includes('/v1/traces')
+      )
+      expect(fetchCall).toBeDefined()
+
+      const body = JSON.parse(fetchCall![1].body as string)
+      expect(body.model).toBe('gpt-4')
+      expect(body.provider).toBe('openai')
+      expect(body.status).toBe('SUCCESS')
+      expect(body.output).toBe('Hello world!')
+      expect(body.inputTokens).toBe(10)
+      expect(body.outputTokens).toBe(5)
+      expect(body.temperature).toBe(0.7)
+      expect(body.tags).toEqual(['test-tag'])
+      expect(body.userId).toBe('user-123')
+      expect(body.sessionId).toBe('session-456')
+    })
+  })
+
+  describe('config passing', () => {
+    it('passes config options to adapter stream method', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { OpenAIAdapter } = await import('../src/providers/openai-adapter')
+      const streamSpy = vi.spyOn(OpenAIAdapter.prototype, 'stream').mockReturnValue({
+        chunks: (async function* () {
+          yield 'Hello'
+        })(),
+        result: Promise.resolve({
+          text: 'Hello',
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        }),
+      })
+
+      const stream = tracia.runLocalStream({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        temperature: 0.7,
+        maxOutputTokens: 1000,
+        topP: 0.9,
+        stopSequences: ['END'],
+        timeoutMs: 30000,
+        sendTrace: false,
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of stream) {
+        // consume
+      }
+
+      expect(streamSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            temperature: 0.7,
+            maxOutputTokens: 1000,
+            topP: 0.9,
+            stopSequences: ['END'],
+          }),
+          timeoutMs: 30000,
+        })
+      )
+
+      streamSpy.mockRestore()
+    })
+  })
+})

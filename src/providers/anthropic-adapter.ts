@@ -4,6 +4,8 @@ import {
   LLMProviderAdapter,
   ProviderCompletionOptions,
   ProviderCompletionResult,
+  ProviderStreamOptions,
+  ProviderStreamResult,
 } from './types'
 
 const SUPPORTED_MODEL_PREFIXES = ['claude-']
@@ -73,6 +75,94 @@ export class AnthropicAdapter implements LLMProviderAdapter {
         TraciaErrorCode.PROVIDER_ERROR,
         `Anthropic error: ${error instanceof Error ? error.message : String(error)}`
       )
+    }
+  }
+
+  stream(options: ProviderStreamOptions): ProviderStreamResult {
+    const { systemPrompt, messages } = this.separateSystemMessage(options.messages)
+
+    if (messages.length === 0) {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'Anthropic requires at least one user or assistant message'
+      )
+    }
+
+    const safeCustomOptions = this.filterCustomOptions(options.config.customOptions)
+
+    let resolveResult: (result: ProviderCompletionResult) => void
+    let rejectResult: (error: Error) => void
+    const resultPromise = new Promise<ProviderCompletionResult>((resolve, reject) => {
+      resolveResult = resolve
+      rejectResult = reject
+    })
+
+    const loadSdk = this.loadSdk.bind(this)
+    async function* generateChunks(): AsyncGenerator<string> {
+      let fullText = ''
+
+      try {
+        const Anthropic = await loadSdk()
+        const client = new Anthropic({
+          apiKey: options.apiKey,
+          timeout: options.timeoutMs,
+        })
+
+        const stream = client.messages.stream(
+          {
+            ...safeCustomOptions,
+            model: options.model,
+            system: systemPrompt,
+            messages: messages.map(msg => ({
+              role: msg.role as 'user' | 'assistant',
+              content: msg.content,
+            })),
+            temperature: options.config.temperature,
+            max_tokens: options.config.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
+            top_p: options.config.topP,
+            stop_sequences: options.config.stopSequences,
+          },
+          options.signal ? { signal: options.signal } : undefined
+        )
+
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            const text = event.delta.text
+            if (text) {
+              fullText += text
+              yield text
+            }
+          }
+        }
+
+        const finalMessage = await stream.finalMessage()
+        resolveResult!({
+          text: fullText,
+          inputTokens: finalMessage.usage.input_tokens,
+          outputTokens: finalMessage.usage.output_tokens,
+          totalTokens: finalMessage.usage.input_tokens + finalMessage.usage.output_tokens,
+        })
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          const traciaError = new TraciaError(
+            TraciaErrorCode.ABORTED,
+            'Stream aborted'
+          )
+          rejectResult!(traciaError)
+          throw traciaError
+        }
+        const traciaError = new TraciaError(
+          TraciaErrorCode.PROVIDER_ERROR,
+          `Anthropic error: ${error instanceof Error ? error.message : String(error)}`
+        )
+        rejectResult!(traciaError)
+        throw traciaError
+      }
+    }
+
+    return {
+      chunks: generateChunks(),
+      result: resultPromise,
     }
   }
 
