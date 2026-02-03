@@ -342,6 +342,9 @@ export interface RunLocalInput {
   /** Control which tools the model can use */
   toolChoice?: ToolChoice
 
+  /** Response format for structured outputs (e.g., JSON mode) */
+  responseFormat?: { type: 'json' } | { type: 'json'; schema: Record<string, unknown>; name?: string; description?: string }
+
   /** AbortSignal to cancel the request (only used when stream: true) */
   signal?: AbortSignal
 

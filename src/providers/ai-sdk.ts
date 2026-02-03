@@ -27,6 +27,7 @@ export interface CompletionOptions {
   toolChoice?: ToolChoice
   timeoutMs?: number
   providerOptions?: Partial<Record<LLMProvider, Record<string, unknown>>>
+  responseFormat?: { type: 'json' } | { type: 'json'; schema: Record<string, unknown>; name?: string; description?: string }
 }
 
 export interface CompletionResult {
@@ -376,6 +377,7 @@ export async function complete(options: CompletionOptions): Promise<CompletionRe
       toolChoice: convertedToolChoice,
       abortSignal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
       providerOptions: mergeProviderOptions(options.providerOptions),
+      ...(options.responseFormat && { responseFormat: options.responseFormat }),
     })
 
     const toolCalls = extractToolCalls(result.toolCalls)
@@ -431,6 +433,7 @@ export function stream(options: StreamOptions): StreamResult {
         toolChoice: convertedToolChoice,
         abortSignal,
         providerOptions: mergeProviderOptions(options.providerOptions),
+        ...(options.responseFormat && { responseFormat: options.responseFormat }),
       })
 
       for await (const chunk of result.textStream) {

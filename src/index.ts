@@ -241,6 +241,7 @@ export class Tracia {
         toolChoice: input.toolChoice,
         providerOptions: input.customOptions,
         timeoutMs: input.timeoutMs,
+        responseFormat: input.responseFormat,
       })
     } catch (error) {
       if (error instanceof TraciaError) {
@@ -639,6 +640,7 @@ export class Tracia {
       timeoutMs: input.timeoutMs,
       signal,
       providerOptions: input.customOptions,
+      responseFormat: input.responseFormat,
     })
 
     let collectedText = ''
