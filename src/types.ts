@@ -323,8 +323,8 @@ export interface RunLocalInput {
   /** Timeout in milliseconds for the LLM call */
   timeoutMs?: number
 
-  /** Provider-specific options passed directly to the SDK */
-  customOptions?: Record<string, unknown>
+  /** Provider-specific options passed directly to the AI SDK (e.g., { openai: { strictJsonSchema: true } }) */
+  customOptions?: Record<string, Record<string, unknown>>
 
   variables?: Record<string, string>
 
@@ -541,6 +541,9 @@ export interface RunResponsesInput {
   traceId?: string
   /** Parent span ID for chaining spans in a sequence */
   parentSpanId?: string
+
+  /** Provider-specific options passed directly to the AI SDK (e.g., { openai: { strictJsonSchema: true } }) */
+  customOptions?: Record<string, Record<string, unknown>>
 }
 
 /**

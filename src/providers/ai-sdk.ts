@@ -26,6 +26,7 @@ export interface CompletionOptions {
   tools?: ToolDefinition[]
   toolChoice?: ToolChoice
   timeoutMs?: number
+  providerOptions?: Record<string, Record<string, unknown>>
 }
 
 export interface CompletionResult {
@@ -55,6 +56,7 @@ export interface ResponsesOptions {
   maxOutputTokens?: number
   timeoutMs?: number
   signal?: AbortSignal
+  providerOptions?: Record<string, Record<string, unknown>>
 }
 
 export interface ResponsesResult {
@@ -326,6 +328,27 @@ function extractToolCalls(toolCalls?: any[]): ToolCall[] {
     }))
 }
 
+type ProviderOptions = Record<string, Record<string, JSONValue>>
+type JSONValue = string | number | boolean | null | JSONValue[] | { [key: string]: JSONValue }
+
+// Defaults to strict: false to match the OpenAI API default. The @ai-sdk/openai
+// provider defaults to strict: true, which rejects tool schemas with open-ended objects.
+function mergeProviderOptions(
+  userOptions?: Record<string, Record<string, unknown>>
+): ProviderOptions {
+  const defaults: ProviderOptions = {
+    openai: { strictJsonSchema: false },
+  }
+
+  if (!userOptions) return defaults
+
+  const merged = { ...defaults }
+  for (const [provider, options] of Object.entries(userOptions)) {
+    merged[provider] = { ...merged[provider], ...options } as Record<string, JSONValue>
+  }
+  return merged
+}
+
 export async function complete(options: CompletionOptions): Promise<CompletionResult> {
   const { generateText } = await loadAISdk()
   const provider = resolveProvider(options.model, options.provider)
@@ -347,6 +370,7 @@ export async function complete(options: CompletionOptions): Promise<CompletionRe
       tools: convertedTools,
       toolChoice: convertedToolChoice,
       abortSignal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+      providerOptions: mergeProviderOptions(options.providerOptions),
     })
 
     const toolCalls = extractToolCalls(result.toolCalls)
@@ -401,6 +425,7 @@ export function stream(options: StreamOptions): StreamResult {
         tools: convertedTools,
         toolChoice: convertedToolChoice,
         abortSignal,
+        providerOptions: mergeProviderOptions(options.providerOptions),
       })
 
       for await (const chunk of result.textStream) {
@@ -532,6 +557,7 @@ export function responsesStream(options: ResponsesOptions): ResponsesStreamResul
         maxOutputTokens: options.maxOutputTokens,
         tools: convertedTools,
         abortSignal,
+        providerOptions: mergeProviderOptions(options.providerOptions),
       })
 
       for await (const chunk of result.textStream) {

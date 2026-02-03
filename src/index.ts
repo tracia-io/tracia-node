@@ -239,6 +239,7 @@ export class Tracia {
         stopSequences: input.stopSequences,
         tools: input.tools,
         toolChoice: input.toolChoice,
+        providerOptions: input.customOptions,
         timeoutMs: input.timeoutMs,
       })
     } catch (error) {
@@ -478,6 +479,7 @@ export class Tracia {
       maxOutputTokens: input.maxOutputTokens,
       timeoutMs: input.timeoutMs,
       signal,
+      providerOptions: input.customOptions,
     })
 
     let collectedText = ''
@@ -636,6 +638,7 @@ export class Tracia {
       toolChoice: input.toolChoice,
       timeoutMs: input.timeoutMs,
       signal,
+      providerOptions: input.customOptions,
     })
 
     let collectedText = ''
