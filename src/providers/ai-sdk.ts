@@ -291,11 +291,16 @@ async function convertTools(tools?: ToolDefinition[]): Promise<Record<string, an
 
   const result: Record<string, any> = {}
   for (const toolDef of tools) {
-    result[toolDef.name] = tool({
+    const t = tool({
       description: toolDef.description,
       inputSchema: jsonSchema(toolDef.parameters),
-      execute: async (args: any) => args, // No-op execute function
+      execute: async (args: any) => args,
     })
+    // Set strict: false to match the OpenAI Chat Completions default.
+    // The Responses API defaults strict to true, which prevents open-ended
+    // object schemas (e.g., { type: "object", properties: {} }) from working.
+    ;(t as any).strict = false
+    result[toolDef.name] = t
   }
 
   return result
