@@ -54,9 +54,16 @@ export class TraciaSession {
   private traceId: string | null = null
   private lastSpanId: string | null = null
 
-  /** @internal */
-  constructor(tracia: Tracia) {
+  /**
+   * @internal
+   * @param tracia - The Tracia client instance
+   * @param initialTraceId - Optional trace ID to continue an existing trace
+   * @param initialParentSpanId - Optional parent span ID to chain from
+   */
+  constructor(tracia: Tracia, initialTraceId?: string, initialParentSpanId?: string) {
     this.tracia = tracia
+    this.traceId = initialTraceId ?? null
+    this.lastSpanId = initialParentSpanId ?? null
   }
 
   /**

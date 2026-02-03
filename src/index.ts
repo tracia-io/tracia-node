@@ -812,11 +812,19 @@ export class Tracia {
    * Sessions automatically chain spans by setting traceId and parentSpanId,
    * creating a linked sequence of spans that can be viewed together in the Tracia dashboard.
    *
+   * @param options - Optional configuration for the session
+   * @param options.traceId - Continue an existing trace instead of starting a new one
+   * @param options.parentSpanId - Chain from an existing span
+   *
    * @example
    * ```typescript
+   * // Start a new trace
    * const session = tracia.createSession()
    *
-   * // First call - creates the trace group
+   * // Or continue an existing trace (e.g., across HTTP requests)
+   * const session = tracia.createSession({ traceId: previousTraceId })
+   *
+   * // First call - creates or continues the trace group
    * const result1 = await session.runLocal({
    *   model: 'gpt-4o',
    *   messages: [{ role: 'user', content: 'What is the weather?' }],
@@ -829,8 +837,8 @@ export class Tracia {
    * })
    * ```
    */
-  createSession(): TraciaSession {
-    return new TraciaSession(this)
+  createSession(options?: { traceId?: string; parentSpanId?: string }): TraciaSession {
+    return new TraciaSession(this, options?.traceId, options?.parentSpanId)
   }
 
   private validateRunLocalInput(input: RunLocalInput): void {

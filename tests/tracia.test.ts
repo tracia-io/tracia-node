@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { Tracia, TraciaError, TraciaErrorCode } from '../src/index'
+import { Tracia, TraciaError, TraciaErrorCode, TraciaSession } from '../src/index'
 
 describe('Tracia', () => {
   describe('constructor', () => {
@@ -10,6 +10,26 @@ describe('Tracia', () => {
     it('creates instance with valid apiKey', () => {
       const tracia = new Tracia({ apiKey: 'tr_test_key' })
       expect(tracia).toBeInstanceOf(Tracia)
+    })
+  })
+
+  describe('createSession', () => {
+    it('creates session with no initial values', () => {
+      const tracia = new Tracia({ apiKey: 'tr_test_key' })
+      const session = tracia.createSession()
+      expect(session).toBeInstanceOf(TraciaSession)
+      expect(session.getTraceId()).toBeNull()
+      expect(session.getLastSpanId()).toBeNull()
+    })
+
+    it('accepts initial traceId and parentSpanId', () => {
+      const tracia = new Tracia({ apiKey: 'tr_test_key' })
+      const session = tracia.createSession({
+        traceId: 'tr_abc123def456789',
+        parentSpanId: 'sp_def456abc123789',
+      })
+      expect(session.getTraceId()).toBe('tr_abc123def456789')
+      expect(session.getLastSpanId()).toBe('sp_def456abc123789')
     })
   })
 })
