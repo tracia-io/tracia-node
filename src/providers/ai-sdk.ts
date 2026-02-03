@@ -26,7 +26,7 @@ export interface CompletionOptions {
   tools?: ToolDefinition[]
   toolChoice?: ToolChoice
   timeoutMs?: number
-  providerOptions?: Record<string, Record<string, unknown>>
+  providerOptions?: Partial<Record<LLMProvider, Record<string, unknown>>>
 }
 
 export interface CompletionResult {
@@ -56,7 +56,7 @@ export interface ResponsesOptions {
   maxOutputTokens?: number
   timeoutMs?: number
   signal?: AbortSignal
-  providerOptions?: Record<string, Record<string, unknown>>
+  providerOptions?: Partial<Record<LLMProvider, Record<string, unknown>>>
 }
 
 export interface ResponsesResult {
@@ -339,10 +339,10 @@ type JSONValue = string | number | boolean | null | JSONValue[] | { [key: string
 // Defaults to strict: false to match the OpenAI API default. The @ai-sdk/openai
 // provider defaults to strict: true, which rejects tool schemas with open-ended objects.
 function mergeProviderOptions(
-  userOptions?: Record<string, Record<string, unknown>>
+  userOptions?: Partial<Record<LLMProvider, Record<string, unknown>>>
 ): ProviderOptions {
   const defaults: ProviderOptions = {
-    openai: { strictJsonSchema: false },
+    [LLMProvider.OPENAI]: { strictJsonSchema: false },
   }
 
   if (!userOptions) return defaults
