@@ -1,6 +1,6 @@
 # Tracia SDK
 
-TypeScript SDK for [Tracia](https://tracia.io) — store, test, and trace LLM prompts.
+TypeScript SDK for [Tracia](https://tracia.io) - store, test, and trace LLM prompts.
 
 ## Installation
 
@@ -15,8 +15,16 @@ import { Tracia } from 'tracia';
 
 const tracia = new Tracia({ apiKey: process.env.TRACIA_API_KEY });
 
+// Run a prompt stored in Tracia
 const result = await tracia.prompts.run('welcome-email', { name: 'Alice' });
 console.log(result.text);
+
+// Or call LLM directly with automatic tracing
+const response = await tracia.runLocal({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Hello!' }],
+});
+console.log(response.text);
 ```
 
 ## Documentation
