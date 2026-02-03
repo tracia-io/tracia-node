@@ -5,15 +5,15 @@ TypeScript SDK for [Tracia](https://tracia.io) - store, test, and trace LLM prom
 ## Installation
 
 ```bash
-npm install tracia ai
+npm install tracia
 ```
 
-When using `runLocal()` or `runResponses()`, install the provider for your model:
+If using `runLocal()` or `runResponses()` to call LLMs directly, also install `ai` and your provider:
 
 ```bash
-npm install @ai-sdk/openai    # for GPT, o1, o3, etc.
-npm install @ai-sdk/anthropic  # for Claude
-npm install @ai-sdk/google     # for Gemini
+npm install ai @ai-sdk/openai    # for GPT, o1, o3, etc.
+npm install ai @ai-sdk/anthropic  # for Claude
+npm install ai @ai-sdk/google     # for Gemini
 ```
 
 ## Quick Start

@@ -61,7 +61,7 @@
   },
   "peerDependenciesMeta": {
     "ai": {
-      "optional": false
+      "optional": true
     },
     "@ai-sdk/openai": {
       "optional": true
