@@ -273,7 +273,7 @@ export class Tracia {
         topP: input.topP,
         tools: input.tools,
         toolCalls: completionResult?.toolCalls,
-        traceId: input.traceId,
+        traceId,
         parentSpanId: input.parentSpanId,
       })
     }
@@ -518,7 +518,7 @@ export class Tracia {
               name: tc.name,
               arguments: tc.arguments,
             })),
-            traceId: input.traceId,
+            traceId,
             parentSpanId: input.parentSpanId,
           })
         }
@@ -560,7 +560,7 @@ export class Tracia {
             userId: input.userId,
             sessionId: input.sessionId,
             tools: input.tools,
-            traceId: input.traceId,
+            traceId,
             parentSpanId: input.parentSpanId,
           })
         }
@@ -674,7 +674,7 @@ export class Tracia {
             topP: input.topP,
             tools: input.tools,
             toolCalls: completionResult.toolCalls,
-            traceId: input.traceId,
+            traceId,
             parentSpanId: input.parentSpanId,
           })
         }
@@ -730,7 +730,7 @@ export class Tracia {
             temperature: input.temperature,
             maxOutputTokens: input.maxOutputTokens,
             topP: input.topP,
-            traceId: input.traceId,
+            traceId,
             parentSpanId: input.parentSpanId,
           })
         }
