@@ -83,6 +83,7 @@ export class Prompts {
 
     return {
       text: response.text,
+      spanId: response.spanId,
       traceId: response.traceId,
       promptVersion: response.promptVersion,
       latencyMs: response.latencyMs,

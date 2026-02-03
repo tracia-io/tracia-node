@@ -4,7 +4,7 @@ import { Tracia, TraciaError, TraciaErrorCode, Eval } from '../src/index'
 const mockFetch = vi.fn()
 global.fetch = mockFetch
 
-describe('traces', () => {
+describe('spans', () => {
   beforeEach(() => {
     mockFetch.mockReset()
   })
@@ -15,9 +15,11 @@ describe('traces', () => {
 
   const validApiKey = 'tr_test_api_key'
 
-  const mockTrace = {
-    id: 'trace_123',
-    traceId: 'trace_abc123',
+  const mockSpan = {
+    id: 'span_123',
+    spanId: 'sp_abc123def456789',
+    traceId: 'tr_abc123def456789',
+    parentSpanId: null,
     promptSlug: 'welcome-email',
     promptVersion: 1,
     model: 'gpt-4',
@@ -43,9 +45,11 @@ describe('traces', () => {
     createdAt: '2024-01-01T00:00:00.000Z',
   }
 
-  const mockTraceListItem = {
-    id: 'trace_123',
-    traceId: 'trace_abc123',
+  const mockSpanListItem = {
+    id: 'span_123',
+    spanId: 'sp_abc123def456789',
+    traceId: 'tr_abc123def456789',
+    parentSpanId: null,
     promptSlug: 'welcome-email',
     model: 'gpt-4',
     status: 'SUCCESS',
@@ -58,24 +62,24 @@ describe('traces', () => {
   }
 
   describe('get', () => {
-    it('successfully gets a trace by id', async () => {
+    it('successfully gets a span by id', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => mockTrace,
+        json: async () => mockSpan,
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const trace = await tracia.traces.get('trace_abc123')
+      const span = await tracia.spans.get('sp_abc123def456789')
 
-      expect(trace).toEqual(mockTrace)
+      expect(span).toEqual(mockSpan)
 
       const [url, options] = mockFetch.mock.calls[0]
-      expect(url).toContain('/api/v1/traces/trace_abc123')
+      expect(url).toContain('/api/v1/spans/sp_abc123def456789')
       expect(options.method).toBe('GET')
       expect(options.headers['Authorization']).toBe(`Bearer ${validApiKey}`)
     })
 
-    it('throws NOT_FOUND error when trace does not exist', async () => {
+    it('throws NOT_FOUND error when span does not exist', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
@@ -83,7 +87,7 @@ describe('traces', () => {
         json: async () => ({
           error: {
             code: 'NOT_FOUND',
-            message: 'Trace not found: unknown-trace',
+            message: 'Span not found: unknown-span',
           },
         }),
       })
@@ -91,7 +95,7 @@ describe('traces', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       try {
-        await tracia.traces.get('unknown-trace')
+        await tracia.spans.get('unknown-span')
         expect.fail('Expected TraciaError to be thrown')
       } catch (error) {
         expect(error).toBeInstanceOf(TraciaError)
@@ -101,76 +105,76 @@ describe('traces', () => {
       }
     })
 
-    it('encodes traceId with special characters', async () => {
+    it('encodes spanId with special characters', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => mockTrace,
+        json: async () => mockSpan,
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.get('trace/special')
+      await tracia.spans.get('sp_abc/special')
 
       const [url] = mockFetch.mock.calls[0]
-      expect(url).toContain('/api/v1/traces/trace%2Fspecial')
+      expect(url).toContain('/api/v1/spans/sp_abc%2Fspecial')
     })
   })
 
   describe('list', () => {
-    it('successfully lists traces', async () => {
+    it('successfully lists spans', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.list()
+      const result = await tracia.spans.list()
 
-      expect(result.traces).toEqual([mockTraceListItem])
+      expect(result.spans).toEqual([mockSpanListItem])
       expect(mockFetch).toHaveBeenCalledTimes(1)
 
       const [url, options] = mockFetch.mock.calls[0]
-      expect(url).toContain('/api/v1/traces')
+      expect(url).toContain('/api/v1/spans')
       expect(url).not.toContain('?')
       expect(options.method).toBe('GET')
       expect(options.headers['Authorization']).toBe(`Bearer ${validApiKey}`)
     })
 
-    it('returns empty array when no traces', async () => {
+    it('returns empty array when no spans', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [] }),
+        json: async () => ({ spans: [] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.list()
+      const result = await tracia.spans.list()
 
-      expect(result.traces).toEqual([])
+      expect(result.spans).toEqual([])
     })
 
     it('returns nextCursor for pagination', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          traces: [mockTraceListItem],
+          spans: [mockSpanListItem],
           nextCursor: 'cursor_abc123',
         }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.list()
+      const result = await tracia.spans.list()
 
-      expect(result.traces).toEqual([mockTraceListItem])
+      expect(result.spans).toEqual([mockSpanListItem])
       expect(result.nextCursor).toBe('cursor_abc123')
     })
 
     it('filters by promptSlug', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ promptSlug: 'welcome-email' })
+      await tracia.spans.list({ promptSlug: 'welcome-email' })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('promptSlug=welcome-email')
@@ -179,11 +183,11 @@ describe('traces', () => {
     it('filters by status', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ status: 'SUCCESS' })
+      await tracia.spans.list({ status: 'SUCCESS' })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('status=SUCCESS')
@@ -192,14 +196,14 @@ describe('traces', () => {
     it('filters by date range', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const startDate = new Date('2024-01-01T00:00:00.000Z')
       const endDate = new Date('2024-01-31T23:59:59.999Z')
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ startDate, endDate })
+      await tracia.spans.list({ startDate, endDate })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('startDate=2024-01-01T00%3A00%3A00.000Z')
@@ -209,11 +213,11 @@ describe('traces', () => {
     it('filters by userId', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ userId: 'user_123' })
+      await tracia.spans.list({ userId: 'user_123' })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('userId=user_123')
@@ -222,11 +226,11 @@ describe('traces', () => {
     it('filters by sessionId', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ sessionId: 'session_456' })
+      await tracia.spans.list({ sessionId: 'session_456' })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('sessionId=session_456')
@@ -235,11 +239,11 @@ describe('traces', () => {
     it('filters by tags', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ tags: ['production', 'onboarding'] })
+      await tracia.spans.list({ tags: ['production', 'onboarding'] })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('tags=production%2Conboarding')
@@ -248,11 +252,11 @@ describe('traces', () => {
     it('uses limit for pagination', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ limit: 50 })
+      await tracia.spans.list({ limit: 50 })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('limit=50')
@@ -261,11 +265,11 @@ describe('traces', () => {
     it('uses cursor for pagination', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({ cursor: 'cursor_abc123' })
+      await tracia.spans.list({ cursor: 'cursor_abc123' })
 
       const [url] = mockFetch.mock.calls[0]
       expect(url).toContain('cursor=cursor_abc123')
@@ -274,11 +278,11 @@ describe('traces', () => {
     it('combines multiple filters', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ traces: [mockTraceListItem] }),
+        json: async () => ({ spans: [mockSpanListItem] }),
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.list({
+      await tracia.spans.list({
         promptSlug: 'welcome-email',
         status: 'SUCCESS',
         userId: 'user_123',
@@ -311,7 +315,7 @@ describe('traces', () => {
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.evaluate('trace_abc123', {
+      const result = await tracia.spans.evaluate('sp_abc123def456789', {
         evaluator: 'quality',
         value: Eval.POSITIVE,
       })
@@ -319,7 +323,7 @@ describe('traces', () => {
       expect(result).toEqual(mockEvaluateResult)
 
       const [url, options] = mockFetch.mock.calls[0]
-      expect(url).toContain('/api/v1/traces/trace_abc123/evaluations')
+      expect(url).toContain('/api/v1/spans/sp_abc123def456789/evaluations')
       expect(options.method).toBe('POST')
       expect(options.headers['Authorization']).toBe(`Bearer ${validApiKey}`)
 
@@ -337,7 +341,7 @@ describe('traces', () => {
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.evaluate('trace_abc123', {
+      const result = await tracia.spans.evaluate('sp_abc123def456789', {
         evaluator: 'quality',
         value: Eval.NEGATIVE,
       })
@@ -357,7 +361,7 @@ describe('traces', () => {
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.evaluate('trace_abc123', {
+      const result = await tracia.spans.evaluate('sp_abc123def456789', {
         evaluator: 'accuracy',
         value: 8,
       })
@@ -377,7 +381,7 @@ describe('traces', () => {
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      const result = await tracia.traces.evaluate('trace_abc123', {
+      const result = await tracia.spans.evaluate('sp_abc123def456789', {
         evaluator: 'quality',
         value: Eval.NEGATIVE,
         note: 'Response was off-topic',
@@ -394,7 +398,7 @@ describe('traces', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       try {
-        await tracia.traces.evaluate('trace_abc123', {
+        await tracia.spans.evaluate('sp_abc123def456789', {
           evaluator: 'quality',
           value: 'invalid' as unknown as number,
         })
@@ -409,7 +413,7 @@ describe('traces', () => {
       expect(mockFetch).not.toHaveBeenCalled()
     })
 
-    it('throws NOT_FOUND error when trace does not exist', async () => {
+    it('throws NOT_FOUND error when span does not exist', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
@@ -417,7 +421,7 @@ describe('traces', () => {
         json: async () => ({
           error: {
             code: 'NOT_FOUND',
-            message: 'Trace not found: unknown-trace',
+            message: 'Span not found: unknown-span',
           },
         }),
       })
@@ -425,7 +429,7 @@ describe('traces', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       try {
-        await tracia.traces.evaluate('unknown-trace', {
+        await tracia.spans.evaluate('unknown-span', {
           evaluator: 'quality',
           value: Eval.POSITIVE,
         })
@@ -438,20 +442,20 @@ describe('traces', () => {
       }
     })
 
-    it('encodes traceId with special characters', async () => {
+    it('encodes spanId with special characters', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => mockEvaluateResult,
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.evaluate('trace/special', {
+      await tracia.spans.evaluate('sp_abc/special', {
         evaluator: 'quality',
         value: Eval.POSITIVE,
       })
 
       const [url] = mockFetch.mock.calls[0]
-      expect(url).toContain('/api/v1/traces/trace%2Fspecial/evaluations')
+      expect(url).toContain('/api/v1/spans/sp_abc%2Fspecial/evaluations')
     })
 
     it('works with different evaluator keys', async () => {
@@ -461,7 +465,7 @@ describe('traces', () => {
       })
 
       const tracia = new Tracia({ apiKey: validApiKey })
-      await tracia.traces.evaluate('trace_abc123', {
+      await tracia.spans.evaluate('sp_abc123def456789', {
         evaluator: 'helpfulness',
         value: Eval.POSITIVE,
       })

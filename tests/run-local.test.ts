@@ -196,15 +196,15 @@ describe('runLocal', () => {
     })
   })
 
-  describe('trace ID validation', () => {
-    it('throws error for invalid trace ID format', async () => {
+  describe('span ID validation', () => {
+    it('throws error for invalid span ID format', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       await expect(
         tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
-          traceId: 'invalid-trace-id',
+          spanId: 'invalid-span-id',
         })
       ).rejects.toThrow(TraciaError)
 
@@ -212,24 +212,24 @@ describe('runLocal', () => {
         await tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
-          traceId: 'invalid-trace-id',
+          spanId: 'invalid-span-id',
         })
       } catch (error) {
         expect(error).toBeInstanceOf(TraciaError)
         expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
-        expect((error as TraciaError).message).toContain('Invalid trace ID format')
+        expect((error as TraciaError).message).toContain('Invalid span ID format')
       }
     })
 
-    it('accepts valid trace ID format (lowercase)', async () => {
+    it('accepts valid span ID format with sp_ prefix', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
-      // Will fail later due to missing SDK, but should pass trace ID validation
+      // Will fail later due to missing SDK, but should pass span ID validation
       await expect(
         tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
-          traceId: 'tr_1234567890abcdef',
+          spanId: 'sp_1234567890abcdef',
         })
       ).rejects.toThrow() // Will throw MISSING_PROVIDER_API_KEY, not INVALID_REQUEST
 
@@ -237,40 +237,40 @@ describe('runLocal', () => {
         await tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
-          traceId: 'tr_1234567890abcdef',
+          spanId: 'sp_1234567890abcdef',
         })
       } catch (error) {
         expect((error as TraciaError).code).not.toBe(TraciaErrorCode.INVALID_REQUEST)
       }
     })
 
-    it('accepts valid trace ID format (uppercase)', async () => {
+    it('accepts legacy tr_ prefix for backwards compatibility', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       try {
         await tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
-          traceId: 'tr_1234567890ABCDEF',
+          spanId: 'tr_1234567890ABCDEF',
         })
       } catch (error) {
-        // Should not be INVALID_REQUEST (trace ID is valid)
+        // Should not be INVALID_REQUEST (legacy tr_ format is valid)
         expect((error as TraciaError).code).not.toBe(TraciaErrorCode.INVALID_REQUEST)
       }
     })
 
-    it('skips trace ID validation when sendTrace is false', async () => {
+    it('skips span ID validation when sendTrace is false', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       try {
         await tracia.runLocal({
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
-          traceId: 'invalid-trace-id',
+          spanId: 'invalid-span-id',
           sendTrace: false,
         })
       } catch (error) {
-        // Should not throw INVALID_REQUEST for trace ID when sendTrace is false
+        // Should not throw INVALID_REQUEST for span ID when sendTrace is false
         expect((error as TraciaError).code).not.toBe(TraciaErrorCode.INVALID_REQUEST)
       }
     })
@@ -413,7 +413,7 @@ describe('runLocal', () => {
       expect(generateText).toHaveBeenCalled()
     })
 
-    it('generates trace ID when sendTrace is true (default)', async () => {
+    it('generates span ID when sendTrace is true (default)', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
@@ -435,10 +435,10 @@ describe('runLocal', () => {
         messages: [{ role: 'user', content: 'Hello' }],
       })
 
-      expect(result.traceId).toMatch(/^tr_[a-f0-9]{16}$/)
+      expect(result.spanId).toMatch(/^sp_[a-f0-9]{16}$/)
     })
 
-    it('uses provided trace ID when specified', async () => {
+    it('uses provided span ID when specified', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
@@ -458,13 +458,13 @@ describe('runLocal', () => {
       const result = await tracia.runLocal({
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
-        traceId: 'tr_1234567890abcdef',
+        spanId: 'sp_1234567890abcdef',
       })
 
-      expect(result.traceId).toBe('tr_1234567890abcdef')
+      expect(result.spanId).toBe('sp_1234567890abcdef')
     })
 
-    it('returns empty trace ID when sendTrace is false', async () => {
+    it('returns empty span ID when sendTrace is false', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
@@ -482,7 +482,7 @@ describe('runLocal', () => {
         sendTrace: false,
       })
 
-      expect(result.traceId).toBe('')
+      expect(result.spanId).toBe('')
     })
 
     it('throws PROVIDER_ERROR when AI SDK fails', async () => {
@@ -716,7 +716,7 @@ describe('runLocal with stream: true', () => {
       ).toThrow(TraciaError)
     })
 
-    it('throws error for invalid trace ID format', () => {
+    it('throws error for invalid span ID format', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
 
       expect(() =>
@@ -724,7 +724,7 @@ describe('runLocal with stream: true', () => {
           model: 'gpt-4',
           messages: [{ role: 'user', content: 'Hello' }],
           stream: true,
-          traceId: 'invalid-trace-id',
+          spanId: 'invalid-span-id',
         })
       ).toThrow(TraciaError)
     })
@@ -781,7 +781,7 @@ describe('runLocal with stream: true', () => {
   })
 
   describe('stream behavior', () => {
-    it('returns stream with traceId immediately available', async () => {
+    it('returns stream with spanId immediately available', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
@@ -806,11 +806,11 @@ describe('runLocal with stream: true', () => {
         sendTrace: false,
       })
 
-      // traceId should be empty when sendTrace is false
-      expect(stream.traceId).toBe('')
+      // spanId should be empty when sendTrace is false
+      expect(stream.spanId).toBe('')
     })
 
-    it('generates trace ID when sendTrace is true', async () => {
+    it('generates span ID when sendTrace is true', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
@@ -838,7 +838,7 @@ describe('runLocal with stream: true', () => {
         messages: [{ role: 'user', content: 'Hello' }],
       })
 
-      expect(stream.traceId).toMatch(/^tr_[a-f0-9]{16}$/)
+      expect(stream.spanId).toMatch(/^sp_[a-f0-9]{16}$/)
     })
 
     it('yields chunks correctly', async () => {
@@ -917,7 +917,7 @@ describe('runLocal with stream: true', () => {
       expect(result.latencyMs).toBeGreaterThanOrEqual(0)
     })
 
-    it('uses provided trace ID when specified', async () => {
+    it('uses provided span ID when specified', async () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
@@ -943,10 +943,10 @@ describe('runLocal with stream: true', () => {
         stream: true,
         model: 'gpt-4',
         messages: [{ role: 'user', content: 'Hello' }],
-        traceId: 'tr_1234567890abcdef',
+        spanId: 'sp_1234567890abcdef',
       })
 
-      expect(stream.traceId).toBe('tr_1234567890abcdef')
+      expect(stream.spanId).toBe('sp_1234567890abcdef')
     })
   })
 
@@ -1085,7 +1085,7 @@ describe('runResponses with stream: true', () => {
       }
     })
 
-    it('throws error when invalid traceId format is provided', () => {
+    it('throws error when invalid spanId format is provided', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test')
 
@@ -1094,7 +1094,7 @@ describe('runResponses with stream: true', () => {
           model: 'o3-mini',
           input: [{ role: 'user', content: 'Hello' }],
           stream: true,
-          traceId: 'invalid-trace-id',
+          spanId: 'invalid-span-id',
         })
       }).toThrow(TraciaError)
 
@@ -1103,12 +1103,12 @@ describe('runResponses with stream: true', () => {
           model: 'o3-mini',
           input: [{ role: 'user', content: 'Hello' }],
           stream: true,
-          traceId: 'invalid-trace-id',
+          spanId: 'invalid-span-id',
         })
       } catch (error) {
         expect(error).toBeInstanceOf(TraciaError)
         expect((error as TraciaError).code).toBe(TraciaErrorCode.INVALID_REQUEST)
-        expect((error as TraciaError).message).toContain('Invalid trace ID format')
+        expect((error as TraciaError).message).toContain('Invalid span ID format')
       }
     })
   })
@@ -1152,12 +1152,12 @@ describe('runResponses with stream: true', () => {
       }).not.toThrow(TraciaError)
     })
 
-    it('returns a stream with traceId available immediately', () => {
+    it('returns a stream with spanId available immediately', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test')
       mockFetch.mockResolvedValue({
         ok: true,
-        json: async () => ({ traceId: 'tr_mock', cost: 0.001 }),
+        json: async () => ({ spanId: 'sp_mock', cost: 0.001 }),
       })
 
       const stream = tracia.runResponses({
@@ -1166,33 +1166,33 @@ describe('runResponses with stream: true', () => {
         stream: true,
       })
 
-      expect(stream.traceId).toBeDefined()
-      expect(stream.traceId).toMatch(/^tr_[0-9a-f]{16}$/)
+      expect(stream.spanId).toBeDefined()
+      expect(stream.spanId).toMatch(/^sp_[0-9a-f]{16}$/)
       expect(typeof stream.abort).toBe('function')
       expect(stream.result).toBeInstanceOf(Promise)
       expect(typeof stream[Symbol.asyncIterator]).toBe('function')
     })
 
-    it('uses custom traceId when provided', () => {
+    it('uses custom spanId when provided', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test')
       mockFetch.mockResolvedValue({
         ok: true,
-        json: async () => ({ traceId: 'tr_mock', cost: 0.001 }),
+        json: async () => ({ spanId: 'sp_mock', cost: 0.001 }),
       })
 
-      const customTraceId = 'tr_1234567890abcdef'
+      const customSpanId = 'sp_1234567890abcdef'
       const stream = tracia.runResponses({
         model: 'o3-mini',
         input: [{ role: 'user', content: 'Hello' }],
         stream: true,
-        traceId: customTraceId,
+        spanId: customSpanId,
       })
 
-      expect(stream.traceId).toBe(customTraceId)
+      expect(stream.spanId).toBe(customSpanId)
     })
 
-    it('generates no traceId when sendTrace is false without custom traceId', () => {
+    it('generates no spanId when sendTrace is false without custom spanId', () => {
       const tracia = new Tracia({ apiKey: validApiKey })
       vi.stubEnv('OPENAI_API_KEY', 'sk-test')
 
@@ -1203,7 +1203,7 @@ describe('runResponses with stream: true', () => {
         sendTrace: false,
       })
 
-      expect(stream.traceId).toBe('')
+      expect(stream.spanId).toBe('')
     })
   })
 
@@ -1222,7 +1222,7 @@ describe('runResponses with stream: true', () => {
         sendTrace: false,
       })
 
-      expect(stream.traceId).toBe('')
+      expect(stream.spanId).toBe('')
     })
 
     it('accepts function_call_output items', () => {

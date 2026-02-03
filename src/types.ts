@@ -1,7 +1,7 @@
 export interface TraciaOptions {
   apiKey: string
-  /** Called when background trace creation fails */
-  onTraceError?: (error: Error, traceId: string) => void
+  /** Called when background span creation fails */
+  onSpanError?: (error: Error, spanId: string) => void
 }
 
 export interface RunVariables {
@@ -23,6 +23,9 @@ export interface TokenUsage {
 
 export interface RunResult {
   text: string
+  /** Unique ID for this span (individual LLM call) */
+  spanId: string
+  /** Trace ID grouping related spans in a session */
   traceId: string
   promptVersion: number
   latencyMs: number
@@ -62,6 +65,7 @@ export interface ApiErrorResponse {
 
 export interface ApiSuccessResponse {
   text: string
+  spanId: string
   traceId: string
   promptVersion: number
   latencyMs: number
@@ -124,14 +128,16 @@ export interface DeletePromptResponse {
   success: boolean
 }
 
-export type TraceStatus = 'SUCCESS' | 'ERROR'
+export type SpanStatus = 'SUCCESS' | 'ERROR'
 
-export interface TraceListItem {
+export interface SpanListItem {
   id: string
+  spanId: string
   traceId: string
+  parentSpanId: string | null
   promptSlug: string
   model: string
-  status: TraceStatus
+  status: SpanStatus
   latencyMs: number
   inputTokens: number
   outputTokens: number
@@ -140,9 +146,11 @@ export interface TraceListItem {
   createdAt: string
 }
 
-export interface Trace {
+export interface Span {
   id: string
+  spanId: string
   traceId: string
+  parentSpanId: string | null
   promptSlug: string
   promptVersion: number
   model: string
@@ -150,7 +158,7 @@ export interface Trace {
   input: { messages: PromptMessage[] }
   variables: Record<string, string> | null
   output: string | null
-  status: TraceStatus
+  status: SpanStatus
   error: string | null
   latencyMs: number
   inputTokens: number
@@ -163,9 +171,9 @@ export interface Trace {
   createdAt: string
 }
 
-export interface ListTracesOptions {
+export interface ListSpansOptions {
   promptSlug?: string
-  status?: TraceStatus
+  status?: SpanStatus
   startDate?: Date
   endDate?: Date
   userId?: string
@@ -175,8 +183,8 @@ export interface ListTracesOptions {
   cursor?: string
 }
 
-export interface ListTracesResult {
-  traces: TraceListItem[]
+export interface ListSpansResult {
+  spans: SpanListItem[]
   nextCursor?: string
 }
 
@@ -326,8 +334,8 @@ export interface RunLocalInput {
   userId?: string
   sessionId?: string
   sendTrace?: boolean
-  /** Custom trace ID. Must match format: tr_ + 16 hex characters */
-  traceId?: string
+  /** Custom span ID. Must match format: sp_ + 16 hex characters (or legacy tr_ format) */
+  spanId?: string
 
   /** Tool definitions for function calling */
   tools?: ToolDefinition[]
@@ -336,10 +344,18 @@ export interface RunLocalInput {
 
   /** AbortSignal to cancel the request (only used when stream: true) */
   signal?: AbortSignal
+
+  /** Trace ID to group related spans together (uses first span's ID if not specified in session) */
+  traceId?: string
+  /** Parent span ID for chaining spans in a sequence */
+  parentSpanId?: string
 }
 
 export interface RunLocalResult {
   text: string
+  /** Unique ID for this span (individual LLM call) */
+  spanId: string
+  /** Trace ID grouping related spans in a session */
   traceId: string
   latencyMs: number
   usage: TokenUsage
@@ -354,14 +370,14 @@ export interface RunLocalResult {
   message: LocalPromptMessage
 }
 
-export interface CreateTracePayload {
-  traceId: string
+export interface CreateSpanPayload {
+  spanId: string
   model: string
   provider: LLMProvider
   input: { messages: LocalPromptMessage[] }
   variables: Record<string, string> | null
   output: string | null
-  status: TraceStatus
+  status: SpanStatus
   error: string | null
   latencyMs: number
   inputTokens: number
@@ -375,10 +391,14 @@ export interface CreateTracePayload {
   topP?: number
   tools?: ToolDefinition[]
   toolCalls?: ToolCall[]
+  /** Trace ID to group related spans together */
+  traceId?: string
+  /** Parent span ID for chaining spans in a sequence */
+  parentSpanId?: string
 }
 
-export interface CreateTraceResult {
-  traceId: string
+export interface CreateSpanResult {
+  spanId: string
   cost: number | null
 }
 
@@ -404,8 +424,8 @@ export interface StreamResult extends RunLocalResult {
  *   stream: true,
  * })
  *
- * // traceId is available immediately
- * console.log('Trace:', stream.traceId)
+ * // spanId is available immediately
+ * console.log('Span:', stream.spanId)
  *
  * // Iterate over text chunks as they arrive
  * for await (const chunk of stream) {
@@ -423,7 +443,10 @@ export interface StreamResult extends RunLocalResult {
  * - The stream can only be iterated once
  */
 export interface LocalStream {
-  /** Trace ID for this request, available immediately */
+  /** Span ID for this request, available immediately */
+  readonly spanId: string
+
+  /** Trace ID grouping related spans, available immediately */
   readonly traceId: string
 
   /** Async iterator yielding text chunks */
@@ -499,20 +522,25 @@ export interface RunResponsesInput {
   /** Timeout in milliseconds */
   timeoutMs?: number
 
-  /** Whether to send trace to Tracia (default: true) */
+  /** Whether to send span to Tracia (default: true) */
   sendTrace?: boolean
 
-  /** Custom trace ID */
-  traceId?: string
+  /** Custom span ID */
+  spanId?: string
 
-  /** Tags for the trace */
+  /** Tags for the span */
   tags?: string[]
 
-  /** User ID for the trace */
+  /** User ID for the span */
   userId?: string
 
-  /** Session ID for the trace */
+  /** Session ID for the span */
   sessionId?: string
+
+  /** Trace ID to group related spans together (uses first span's ID if not specified in session) */
+  traceId?: string
+  /** Parent span ID for chaining spans in a sequence */
+  parentSpanId?: string
 }
 
 /**
@@ -522,7 +550,10 @@ export interface RunResponsesResult {
   /** Final text output */
   text: string
 
-  /** Trace ID for this request */
+  /** Span ID for this request */
+  spanId: string
+
+  /** Trace ID grouping related spans in a session */
   traceId: string
 
   /** Latency in milliseconds */
@@ -566,7 +597,10 @@ export interface RunResponsesResult {
  * ```
  */
 export interface ResponsesStream {
-  /** Trace ID for this request, available immediately */
+  /** Span ID for this request, available immediately */
+  readonly spanId: string
+
+  /** Trace ID grouping related spans, available immediately */
   readonly traceId: string
 
   /** Async iterator yielding events */
@@ -578,3 +612,28 @@ export interface ResponsesStream {
   /** Abort the stream */
   abort(): void
 }
+
+// ============================================================================
+// Legacy type aliases for backwards compatibility
+// ============================================================================
+
+/** @deprecated Use SpanStatus instead */
+export type TraceStatus = SpanStatus
+
+/** @deprecated Use SpanListItem instead */
+export type TraceListItem = SpanListItem
+
+/** @deprecated Use Span instead */
+export type Trace = Span
+
+/** @deprecated Use ListSpansOptions instead */
+export type ListTracesOptions = ListSpansOptions
+
+/** @deprecated Use ListSpansResult instead */
+export type ListTracesResult = ListSpansResult
+
+/** @deprecated Use CreateSpanPayload instead */
+export type CreateTracePayload = CreateSpanPayload
+
+/** @deprecated Use CreateSpanResult instead */
+export type CreateTraceResult = CreateSpanResult

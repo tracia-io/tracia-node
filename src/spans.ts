@@ -1,38 +1,38 @@
 import { HttpClient } from './client'
 import { TraciaError } from './errors'
 import {
-  Trace,
-  ListTracesOptions,
-  ListTracesResult,
+  Span,
+  ListSpansOptions,
+  ListSpansResult,
   EvaluateOptions,
   EvaluateResult,
   TraciaErrorCode,
-  CreateTracePayload,
-  CreateTraceResult,
+  CreateSpanPayload,
+  CreateSpanResult,
 } from './types'
 
-/** @internal Symbol for setting pending traces map - not part of public API */
-export const INTERNAL_SET_PENDING_TRACES = Symbol('setPendingTracesMap')
+/** @internal Symbol for setting pending spans map - not part of public API */
+export const INTERNAL_SET_PENDING_SPANS = Symbol('setPendingSpansMap')
 
-export class Traces {
-  private pendingTraces: Map<string, Promise<void>> | null = null
+export class Spans {
+  private pendingSpans: Map<string, Promise<void>> | null = null
 
   constructor(private readonly client: HttpClient) {}
 
   /** @internal */
-  [INTERNAL_SET_PENDING_TRACES](map: Map<string, Promise<void>>): void {
-    this.pendingTraces = map
+  [INTERNAL_SET_PENDING_SPANS](map: Map<string, Promise<void>>): void {
+    this.pendingSpans = map
   }
 
-  async create(payload: CreateTracePayload): Promise<CreateTraceResult> {
-    return this.client.post<CreateTraceResult>('/api/v1/traces', payload)
+  async create(payload: CreateSpanPayload): Promise<CreateSpanResult> {
+    return this.client.post<CreateSpanResult>('/api/v1/spans', payload)
   }
 
-  async get(traceId: string): Promise<Trace> {
-    return this.client.get<Trace>(`/api/v1/traces/${encodeURIComponent(traceId)}`)
+  async get(spanId: string): Promise<Span> {
+    return this.client.get<Span>(`/api/v1/spans/${encodeURIComponent(spanId)}`)
   }
 
-  async list(options?: ListTracesOptions): Promise<ListTracesResult> {
+  async list(options?: ListSpansOptions): Promise<ListSpansResult> {
     const params = new URLSearchParams()
 
     if (options?.promptSlug) {
@@ -72,16 +72,16 @@ export class Traces {
     }
 
     const query = params.toString()
-    const path = query ? `/api/v1/traces?${query}` : '/api/v1/traces'
+    const path = query ? `/api/v1/spans?${query}` : '/api/v1/spans'
 
-    return this.client.get<ListTracesResult>(path)
+    return this.client.get<ListSpansResult>(path)
   }
 
-  async evaluate(traceId: string, options: EvaluateOptions): Promise<EvaluateResult> {
-    if (this.pendingTraces) {
-      const pendingTrace = this.pendingTraces.get(traceId)
-      if (pendingTrace) {
-        await pendingTrace
+  async evaluate(spanId: string, options: EvaluateOptions): Promise<EvaluateResult> {
+    if (this.pendingSpans) {
+      const pendingSpan = this.pendingSpans.get(spanId)
+      if (pendingSpan) {
+        await pendingSpan
       }
     }
 
@@ -102,8 +102,13 @@ export class Traces {
     }
 
     return this.client.post<EvaluateResult>(
-      `/api/v1/traces/${encodeURIComponent(traceId)}/evaluations`,
+      `/api/v1/spans/${encodeURIComponent(spanId)}/evaluations`,
       body
     )
   }
 }
+
+/** @deprecated Use Spans instead */
+export const Traces = Spans
+/** @deprecated Use INTERNAL_SET_PENDING_SPANS instead */
+export const INTERNAL_SET_PENDING_TRACES = INTERNAL_SET_PENDING_SPANS

@@ -8,7 +8,8 @@ import {
   resolveProvider,
   CompletionResult,
 } from './providers'
-import { Traces, INTERNAL_SET_PENDING_TRACES } from './traces'
+import { TraciaSession } from './session'
+import { Spans, INTERNAL_SET_PENDING_SPANS } from './spans'
 import {
   TraciaOptions,
   TraciaErrorCode,
@@ -18,7 +19,7 @@ import {
   RunLocalResult,
   StreamResult,
   LocalStream,
-  TraceStatus,
+  SpanStatus,
   ToolCall,
   ContentPart,
   RunResponsesInput,
@@ -27,9 +28,11 @@ import {
   ResponsesEvent,
   ResponsesInputItem,
 } from './types'
-import { generateTraceId, isValidTraceIdFormat } from './utils'
+import { generateSpanId, generateTraceId, isValidSpanIdFormat } from './utils'
 
 export { TraciaError } from './errors'
+export { TraciaSession } from './session'
+export type { SessionRunLocalInput, SessionRunResponsesInput } from './session'
 export type {
   TraciaOptions,
   RunVariables,
@@ -42,11 +45,23 @@ export type {
   MessageRole,
   CreatePromptOptions,
   UpdatePromptOptions,
+  // New span types
+  Span,
+  SpanListItem,
+  SpanStatus,
+  ListSpansOptions,
+  ListSpansResult,
+  CreateSpanPayload,
+  CreateSpanResult,
+  // Legacy aliases (deprecated)
   Trace,
   TraceListItem,
   TraceStatus,
   ListTracesOptions,
   ListTracesResult,
+  CreateTracePayload,
+  CreateTraceResult,
+  // Other types
   EvaluateOptions,
   EvaluateResult,
   LocalPromptMessage,
@@ -54,8 +69,6 @@ export type {
   RunLocalResult,
   StreamResult,
   LocalStream,
-  CreateTracePayload,
-  CreateTraceResult,
   ToolDefinition,
   ToolParameters,
   JsonSchemaProperty,
@@ -82,12 +95,12 @@ export const Eval = {
 } as const
 
 const DEFAULT_BASE_URL = 'https://app.tracia.io'
-const MAX_PENDING_TRACES = 1000
-const TRACE_RETRY_ATTEMPTS = 2
-const TRACE_RETRY_DELAY_MS = 500
+const MAX_PENDING_SPANS = 1000
+const SPAN_RETRY_ATTEMPTS = 2
+const SPAN_RETRY_DELAY_MS = 500
 
-const TRACE_STATUS_SUCCESS: TraceStatus = 'SUCCESS'
-const TRACE_STATUS_ERROR: TraceStatus = 'ERROR'
+const SPAN_STATUS_SUCCESS: SpanStatus = 'SUCCESS'
+const SPAN_STATUS_ERROR: SpanStatus = 'ERROR'
 
 const ENV_VAR_MAP: Record<LLMProvider, string> = {
   [LLMProvider.OPENAI]: 'OPENAI_API_KEY',
@@ -129,10 +142,10 @@ function convertResponsesItemToMessage(item: ResponsesInputItem): LocalPromptMes
 
 export class Tracia {
   private readonly client: HttpClient
-  private readonly pendingTraces = new Map<string, Promise<void>>()
-  private readonly onTraceError?: (error: Error, traceId: string) => void
+  private readonly pendingSpans = new Map<string, Promise<void>>()
+  private readonly onSpanError?: (error: Error, spanId: string) => void
   readonly prompts: Prompts
-  readonly traces: Traces
+  readonly spans: Spans
 
   constructor(options: TraciaOptions) {
     if (!options.apiKey) {
@@ -147,10 +160,10 @@ export class Tracia {
       baseUrl: DEFAULT_BASE_URL,
     })
 
-    this.onTraceError = options.onTraceError
+    this.onSpanError = options.onSpanError
     this.prompts = new Prompts(this.client)
-    this.traces = new Traces(this.client)
-    this.traces[INTERNAL_SET_PENDING_TRACES](this.pendingTraces)
+    this.spans = new Spans(this.client)
+    this.spans[INTERNAL_SET_PENDING_SPANS](this.pendingSpans)
   }
 
   /**
@@ -193,14 +206,16 @@ export class Tracia {
   private async runLocalNonStreaming(input: RunLocalInput): Promise<RunLocalResult> {
     this.validateRunLocalInput(input)
 
+    let spanId = ''
     let traceId = ''
     if (input.sendTrace !== false) {
-      if (input.traceId && !isValidTraceIdFormat(input.traceId)) {
+      if (input.spanId && !isValidSpanIdFormat(input.spanId)) {
         throw new TraciaError(
           TraciaErrorCode.INVALID_REQUEST,
-          `Invalid trace ID format. Must match: tr_ + 16 hex characters (e.g., tr_1234567890abcdef)`
+          `Invalid span ID format. Must match: sp_ + 16 hex characters (e.g., sp_1234567890abcdef)`
         )
       }
+      spanId = input.spanId || generateSpanId()
       traceId = input.traceId || generateTraceId()
     }
 
@@ -236,15 +251,15 @@ export class Tracia {
 
     const latencyMs = Date.now() - startTime
 
-    if (traceId) {
-      this.scheduleTraceCreation(traceId, {
-        traceId,
+    if (spanId) {
+      this.scheduleSpanCreation(spanId, {
+        spanId,
         model: input.model,
         provider: completionResult?.provider ?? provider,
         input: { messages: interpolatedMessages },
         variables: input.variables ?? null,
         output: completionResult?.text ?? null,
-        status: errorMessage ? TRACE_STATUS_ERROR : TRACE_STATUS_SUCCESS,
+        status: errorMessage ? SPAN_STATUS_ERROR : SPAN_STATUS_SUCCESS,
         error: errorMessage,
         latencyMs,
         inputTokens: completionResult?.inputTokens ?? 0,
@@ -258,6 +273,8 @@ export class Tracia {
         topP: input.topP,
         tools: input.tools,
         toolCalls: completionResult?.toolCalls,
+        traceId: input.traceId,
+        parentSpanId: input.parentSpanId,
       })
     }
 
@@ -271,6 +288,7 @@ export class Tracia {
 
     return {
       text: completionResult!.text,
+      spanId,
       traceId,
       latencyMs,
       usage: {
@@ -290,14 +308,16 @@ export class Tracia {
   private runLocalStreaming(input: RunLocalInput): LocalStream {
     this.validateRunLocalInput(input)
 
+    let spanId = ''
     let traceId = ''
     if (input.sendTrace !== false) {
-      if (input.traceId && !isValidTraceIdFormat(input.traceId)) {
+      if (input.spanId && !isValidSpanIdFormat(input.spanId)) {
         throw new TraciaError(
           TraciaErrorCode.INVALID_REQUEST,
-          `Invalid trace ID format. Must match: tr_ + 16 hex characters (e.g., tr_1234567890abcdef)`
+          `Invalid span ID format. Must match: sp_ + 16 hex characters (e.g., sp_1234567890abcdef)`
         )
       }
+      spanId = input.spanId || generateSpanId()
       traceId = input.traceId || generateTraceId()
     }
 
@@ -315,6 +335,7 @@ export class Tracia {
       interpolatedMessages,
       provider,
       apiKey,
+      spanId,
       traceId,
       combinedSignal,
       abortController
@@ -385,14 +406,16 @@ export class Tracia {
   private runResponsesStreaming(input: RunResponsesInput): ResponsesStream {
     this.validateResponsesInput(input)
 
+    let spanId = ''
     let traceId = ''
     if (input.sendTrace !== false) {
-      if (input.traceId && !isValidTraceIdFormat(input.traceId)) {
+      if (input.spanId && !isValidSpanIdFormat(input.spanId)) {
         throw new TraciaError(
           TraciaErrorCode.INVALID_REQUEST,
-          `Invalid trace ID format. Must match: tr_ + 16 hex characters (e.g., tr_1234567890abcdef)`
+          `Invalid span ID format. Must match: sp_ + 16 hex characters (e.g., sp_1234567890abcdef)`
         )
       }
+      spanId = input.spanId || generateSpanId()
       traceId = input.traceId || generateTraceId()
     }
 
@@ -406,6 +429,7 @@ export class Tracia {
     return this.createResponsesStream(
       input,
       apiKey,
+      spanId,
       traceId,
       combinedSignal,
       abortController
@@ -431,6 +455,7 @@ export class Tracia {
   private createResponsesStream(
     input: RunResponsesInput,
     apiKey: string,
+    spanId: string,
     traceId: string,
     signal: AbortSignal,
     abortController: AbortController
@@ -456,7 +481,7 @@ export class Tracia {
     })
 
     let collectedText = ''
-    const scheduleTrace = this.scheduleTraceCreation.bind(this)
+    const scheduleSpan = this.scheduleSpanCreation.bind(this)
 
     async function* wrappedEvents(): AsyncGenerator<ResponsesEvent> {
       try {
@@ -470,15 +495,15 @@ export class Tracia {
         const providerResult = await providerStream.result
         const latencyMs = Date.now() - startTime
 
-        if (traceId) {
-          scheduleTrace(traceId, {
-            traceId,
+        if (spanId) {
+          scheduleSpan(spanId, {
+            spanId,
             model: input.model,
             provider: LLMProvider.OPENAI,
             input: { messages: input.input.map(item => convertResponsesItemToMessage(item)) },
             variables: null,
             output: providerResult.text,
-            status: providerResult.aborted ? TRACE_STATUS_ERROR : TRACE_STATUS_SUCCESS,
+            status: providerResult.aborted ? SPAN_STATUS_ERROR : SPAN_STATUS_SUCCESS,
             error: providerResult.aborted ? 'Stream aborted' : null,
             latencyMs,
             inputTokens: providerResult.usage.inputTokens,
@@ -493,11 +518,14 @@ export class Tracia {
               name: tc.name,
               arguments: tc.arguments,
             })),
+            traceId: input.traceId,
+            parentSpanId: input.parentSpanId,
           })
         }
 
         resolveResult!({
           text: providerResult.text,
+          spanId,
           traceId,
           latencyMs,
           usage: providerResult.usage,
@@ -514,15 +542,15 @@ export class Tracia {
             ? error.message
             : String(error)
 
-        if (traceId) {
-          scheduleTrace(traceId, {
-            traceId,
+        if (spanId) {
+          scheduleSpan(spanId, {
+            spanId,
             model: input.model,
             provider: LLMProvider.OPENAI,
             input: { messages: input.input.map(item => convertResponsesItemToMessage(item)) },
             variables: null,
             output: collectedText || null,
-            status: TRACE_STATUS_ERROR,
+            status: SPAN_STATUS_ERROR,
             error: errorMessage,
             latencyMs,
             inputTokens: 0,
@@ -532,12 +560,15 @@ export class Tracia {
             userId: input.userId,
             sessionId: input.sessionId,
             tools: input.tools,
+            traceId: input.traceId,
+            parentSpanId: input.parentSpanId,
           })
         }
 
         if (isAborted) {
           resolveResult!({
             text: collectedText,
+            spanId,
             traceId,
             latencyMs,
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
@@ -559,6 +590,7 @@ export class Tracia {
     const asyncIterator = wrappedEvents()
 
     return {
+      spanId,
       traceId,
       [Symbol.asyncIterator]() {
         return asyncIterator
@@ -576,6 +608,7 @@ export class Tracia {
     interpolatedMessages: LocalPromptMessage[],
     provider: LLMProvider,
     apiKey: string,
+    spanId: string,
     traceId: string,
     signal: AbortSignal,
     abortController: AbortController
@@ -606,7 +639,7 @@ export class Tracia {
     })
 
     let collectedText = ''
-    const scheduleTrace = this.scheduleTraceCreation.bind(this)
+    const scheduleSpan = this.scheduleSpanCreation.bind(this)
     const buildAssistantMessage = this.buildAssistantMessage.bind(this)
 
     async function* wrappedChunks(): AsyncGenerator<string> {
@@ -619,15 +652,15 @@ export class Tracia {
         const completionResult = await providerStream.result
         const latencyMs = Date.now() - startTime
 
-        if (traceId) {
-          scheduleTrace(traceId, {
-            traceId,
+        if (spanId) {
+          scheduleSpan(spanId, {
+            spanId,
             model: input.model,
             provider: completionResult.provider,
             input: { messages: interpolatedMessages },
             variables: input.variables ?? null,
             output: completionResult.text,
-            status: TRACE_STATUS_SUCCESS,
+            status: SPAN_STATUS_SUCCESS,
             error: null,
             latencyMs,
             inputTokens: completionResult.inputTokens,
@@ -641,6 +674,8 @@ export class Tracia {
             topP: input.topP,
             tools: input.tools,
             toolCalls: completionResult.toolCalls,
+            traceId: input.traceId,
+            parentSpanId: input.parentSpanId,
           })
         }
 
@@ -650,6 +685,7 @@ export class Tracia {
 
         resolveResult!({
           text: completionResult.text,
+          spanId,
           traceId,
           latencyMs,
           usage: {
@@ -674,15 +710,15 @@ export class Tracia {
             ? error.message
             : String(error)
 
-        if (traceId) {
-          scheduleTrace(traceId, {
-            traceId,
+        if (spanId) {
+          scheduleSpan(spanId, {
+            spanId,
             model: input.model,
             provider,
             input: { messages: interpolatedMessages },
             variables: input.variables ?? null,
             output: collectedText || null,
-            status: TRACE_STATUS_ERROR,
+            status: SPAN_STATUS_ERROR,
             error: errorMessage,
             latencyMs,
             inputTokens: 0,
@@ -694,6 +730,8 @@ export class Tracia {
             temperature: input.temperature,
             maxOutputTokens: input.maxOutputTokens,
             topP: input.topP,
+            traceId: input.traceId,
+            parentSpanId: input.parentSpanId,
           })
         }
 
@@ -701,6 +739,7 @@ export class Tracia {
           const abortedMessage = buildAssistantMessage(collectedText, [])
           resolveResult!({
             text: collectedText,
+            spanId,
             traceId,
             latencyMs,
             usage: {
@@ -730,6 +769,7 @@ export class Tracia {
     const asyncIterator = wrappedChunks()
 
     return {
+      spanId,
       traceId,
       [Symbol.asyncIterator]() {
         return asyncIterator
@@ -763,7 +803,34 @@ export class Tracia {
   }
 
   async flush(): Promise<void> {
-    await Promise.all(this.pendingTraces.values())
+    await Promise.all(this.pendingSpans.values())
+  }
+
+  /**
+   * Create a new session for grouping related spans together under a single trace.
+   *
+   * Sessions automatically chain spans by setting traceId and parentSpanId,
+   * creating a linked sequence of spans that can be viewed together in the Tracia dashboard.
+   *
+   * @example
+   * ```typescript
+   * const session = tracia.createSession()
+   *
+   * // First call - creates the trace group
+   * const result1 = await session.runLocal({
+   *   model: 'gpt-4o',
+   *   messages: [{ role: 'user', content: 'What is the weather?' }],
+   * })
+   *
+   * // Second call - automatically linked to the first
+   * const result2 = await session.runLocal({
+   *   model: 'gpt-4o',
+   *   messages: [...messages, result1.message, { role: 'user', content: 'What about tomorrow?' }],
+   * })
+   * ```
+   */
+  createSession(): TraciaSession {
+    return new TraciaSession(this)
   }
 
   private validateRunLocalInput(input: RunLocalInput): void {
@@ -802,43 +869,43 @@ export class Tracia {
     }
   }
 
-  private scheduleTraceCreation(
-    traceId: string,
-    payload: Parameters<Traces['create']>[0]
+  private scheduleSpanCreation(
+    spanId: string,
+    payload: Parameters<Spans['create']>[0]
   ): void {
-    if (this.pendingTraces.size >= MAX_PENDING_TRACES) {
-      const oldestTraceId = this.pendingTraces.keys().next().value
-      if (oldestTraceId) {
-        this.pendingTraces.delete(oldestTraceId)
+    if (this.pendingSpans.size >= MAX_PENDING_SPANS) {
+      const oldestSpanId = this.pendingSpans.keys().next().value
+      if (oldestSpanId) {
+        this.pendingSpans.delete(oldestSpanId)
       }
     }
 
-    const tracePromise = this.createTraceWithRetry(traceId, payload)
-    this.pendingTraces.set(traceId, tracePromise)
-    tracePromise.finally(() => this.pendingTraces.delete(traceId))
+    const spanPromise = this.createSpanWithRetry(spanId, payload)
+    this.pendingSpans.set(spanId, spanPromise)
+    spanPromise.finally(() => this.pendingSpans.delete(spanId))
   }
 
-  private async createTraceWithRetry(
-    traceId: string,
-    payload: Parameters<Traces['create']>[0]
+  private async createSpanWithRetry(
+    spanId: string,
+    payload: Parameters<Spans['create']>[0]
   ): Promise<void> {
     let lastError: Error | null = null
 
-    for (let attempt = 0; attempt <= TRACE_RETRY_ATTEMPTS; attempt++) {
+    for (let attempt = 0; attempt <= SPAN_RETRY_ATTEMPTS; attempt++) {
       try {
-        await this.traces.create(payload)
+        await this.spans.create(payload)
         return
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error))
 
-        if (attempt < TRACE_RETRY_ATTEMPTS) {
-          await this.delay(TRACE_RETRY_DELAY_MS * (attempt + 1))
+        if (attempt < SPAN_RETRY_ATTEMPTS) {
+          await this.delay(SPAN_RETRY_DELAY_MS * (attempt + 1))
         }
       }
     }
 
-    if (this.onTraceError && lastError) {
-      this.onTraceError(lastError, traceId)
+    if (this.onSpanError && lastError) {
+      this.onSpanError(lastError, spanId)
     }
   }
 
