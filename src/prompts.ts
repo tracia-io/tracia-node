@@ -89,6 +89,9 @@ export class Prompts {
       latencyMs: response.latencyMs,
       usage: response.usage,
       cost: response.cost,
+      finishReason: response.finishReason,
+      toolCalls: response.toolCalls,
+      structuredOutput: response.structuredOutput,
     }
   }
 }

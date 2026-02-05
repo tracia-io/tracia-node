@@ -31,6 +31,12 @@ export interface RunResult {
   latencyMs: number
   usage: TokenUsage
   cost: number
+  /** Reason the model stopped generating */
+  finishReason?: FinishReason
+  /** Tool calls made by the model */
+  toolCalls?: ToolCall[]
+  /** Parsed JSON when the prompt has an output schema configured */
+  structuredOutput?: Record<string, unknown>
 }
 
 export enum TraciaErrorCode {
@@ -71,6 +77,9 @@ export interface ApiSuccessResponse {
   latencyMs: number
   usage: TokenUsage
   cost: number
+  finishReason?: FinishReason
+  toolCalls?: ToolCall[]
+  structuredOutput?: Record<string, unknown>
 }
 
 export type MessageRole = 'system' | 'developer' | 'user' | 'assistant' | 'tool'
