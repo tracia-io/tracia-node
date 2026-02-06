@@ -13,6 +13,12 @@ export interface RunOptions {
   tags?: string[]
   userId?: string
   sessionId?: string
+  /** Trace ID to group related spans together */
+  traceId?: string
+  /** Parent span ID for chaining spans in a sequence */
+  parentSpanId?: string
+  /** Full conversation messages for multi-turn (skips template rendering) */
+  messages?: LocalPromptMessage[]
 }
 
 export interface TokenUsage {
@@ -37,6 +43,8 @@ export interface RunResult {
   toolCalls?: ToolCall[]
   /** Parsed JSON when the prompt has an output schema configured */
   structuredOutput?: Record<string, unknown>
+  /** Full conversation messages for multi-turn continuation */
+  messages?: LocalPromptMessage[]
 }
 
 export enum TraciaErrorCode {
@@ -80,6 +88,7 @@ export interface ApiSuccessResponse {
   finishReason?: FinishReason
   toolCalls?: ToolCall[]
   structuredOutput?: Record<string, unknown>
+  messages?: LocalPromptMessage[]
 }
 
 export type MessageRole = 'system' | 'developer' | 'user' | 'assistant' | 'tool'

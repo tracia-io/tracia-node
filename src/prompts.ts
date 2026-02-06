@@ -10,14 +10,18 @@ import {
   UpdatePromptOptions,
   ListPromptsResponse,
   DeletePromptResponse,
+  LocalPromptMessage,
 } from './types'
 
 interface RunRequestBody {
   variables?: RunVariables
+  messages?: LocalPromptMessage[]
   model?: string
   tags?: string[]
   userId?: string
   sessionId?: string
+  traceId?: string
+  parentSpanId?: string
 }
 
 export class Prompts {
@@ -76,6 +80,18 @@ export class Prompts {
       requestBody.sessionId = options.sessionId
     }
 
+    if (options?.traceId) {
+      requestBody.traceId = options.traceId
+    }
+
+    if (options?.parentSpanId) {
+      requestBody.parentSpanId = options.parentSpanId
+    }
+
+    if (options?.messages && options.messages.length > 0) {
+      requestBody.messages = options.messages
+    }
+
     const response = await this.client.post<ApiSuccessResponse>(
       `/api/v1/prompts/${encodeURIComponent(slug)}/run`,
       requestBody
@@ -92,6 +108,7 @@ export class Prompts {
       finishReason: response.finishReason,
       toolCalls: response.toolCalls,
       structuredOutput: response.structuredOutput,
+      messages: response.messages,
     }
   }
 }
