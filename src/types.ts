@@ -151,7 +151,7 @@ export type SpanStatus = 'SUCCESS' | 'ERROR'
 export interface SpanListItem {
   id: string
   spanId: string
-  traceId: string
+  traceId: string | null
   parentSpanId: string | null
   promptSlug: string
   model: string
@@ -167,7 +167,7 @@ export interface SpanListItem {
 export interface Span {
   id: string
   spanId: string
-  traceId: string
+  traceId: string | null
   parentSpanId: string | null
   promptSlug: string
   promptVersion: number
