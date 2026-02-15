@@ -10,6 +10,8 @@ export interface RunVariables {
 
 export interface RunOptions {
   model?: string
+  /** Run a specific prompt version instead of the latest */
+  version?: number
   tags?: string[]
   userId?: string
   sessionId?: string

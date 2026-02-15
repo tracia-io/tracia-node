@@ -17,6 +17,7 @@ interface RunRequestBody {
   variables?: RunVariables
   messages?: LocalPromptMessage[]
   model?: string
+  version?: number
   tags?: string[]
   userId?: string
   sessionId?: string
@@ -66,6 +67,10 @@ export class Prompts {
 
     if (options?.model) {
       requestBody.model = options.model
+    }
+
+    if (options?.version != null) {
+      requestBody.version = options.version
     }
 
     if (options?.tags && options.tags.length > 0) {
