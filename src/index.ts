@@ -106,6 +106,7 @@ const ENV_VAR_MAP: Record<LLMProvider, string> = {
   [LLMProvider.OPENAI]: 'OPENAI_API_KEY',
   [LLMProvider.ANTHROPIC]: 'ANTHROPIC_API_KEY',
   [LLMProvider.GOOGLE]: 'GOOGLE_API_KEY',
+  [LLMProvider.AMAZON_BEDROCK]: 'BEDROCK_API_KEY',
 }
 
 function convertResponsesItemToMessage(item: ResponsesInputItem): LocalPromptMessage {
@@ -995,6 +996,9 @@ export class Tracia {
     const key = process.env[envVar]
 
     if (!key) {
+      // Bedrock can use the AWS SDK credential chain (IAM roles, env vars, etc.)
+      if (provider === LLMProvider.AMAZON_BEDROCK) return ''
+
       throw new TraciaError(
         TraciaErrorCode.MISSING_PROVIDER_API_KEY,
         `Missing API key for ${provider}. Set the ${envVar} environment variable or provide providerApiKey in options.`

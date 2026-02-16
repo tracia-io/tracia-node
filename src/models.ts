@@ -91,6 +91,17 @@ const MODEL_TO_PROVIDER: Record<string, LLMProvider> = {
   'gemini-2.5-pro': LLMProvider.GOOGLE,
   'gemini-3-pro-preview': LLMProvider.GOOGLE,
   'gemini-3-flash-preview': LLMProvider.GOOGLE,
+
+  // Amazon Bedrock
+  'anthropic.claude-haiku-4-5-20251001-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'anthropic.claude-sonnet-4-20250514-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'anthropic.claude-sonnet-4-5-20250929-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'anthropic.claude-opus-4-5-20251101-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'anthropic.claude-opus-4-6-v1': LLMProvider.AMAZON_BEDROCK,
+  'amazon.nova-micro-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'amazon.nova-lite-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'amazon.nova-pro-v1:0': LLMProvider.AMAZON_BEDROCK,
+  'mistral.pixtral-large-2502-v1:0': LLMProvider.AMAZON_BEDROCK,
 }
 
 export function getProviderForModel(modelId: string): LLMProvider | undefined {
