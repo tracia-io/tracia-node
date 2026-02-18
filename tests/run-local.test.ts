@@ -509,6 +509,104 @@ describe('runLocal', () => {
       } catch (error) {
         expect((error as TraciaError).code).toBe(TraciaErrorCode.PROVIDER_ERROR)
         expect((error as TraciaError).message).toContain('API rate limit exceeded')
+        expect((error as TraciaError).message).toContain('gpt-4')
+      }
+    })
+
+    it('extracts error details from AI SDK responseBody', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      const aiError = new Error('undefined: The provided model identifier is invalid.')
+      ;(aiError as Record<string, unknown>).statusCode = 400
+      ;(aiError as Record<string, unknown>).responseBody = '{"message":"The provided model identifier is invalid."}'
+      vi.mocked(generateText).mockRejectedValue(aiError)
+
+      try {
+        await tracia.runLocal({
+          model: 'amazon.titan-text-express-v1',
+          provider: LLMProvider.OPENAI,
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      } catch (error) {
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.PROVIDER_ERROR)
+        expect((error as TraciaError).message).toContain('The provided model identifier is invalid.')
+        expect((error as TraciaError).message).toContain('HTTP 400')
+        expect((error as TraciaError).message).toContain('amazon.titan-text-express-v1')
+        expect((error as TraciaError).statusCode).toBe(400)
+      }
+    })
+
+    it('cleans up AI SDK "undefined: " prefix in error messages', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { generateText } = await import('ai')
+      vi.mocked(generateText).mockRejectedValue(new Error('undefined: Some provider error'))
+
+      try {
+        await tracia.runLocal({
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: 'Hello' }],
+          sendTrace: false,
+        })
+      } catch (error) {
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.PROVIDER_ERROR)
+        expect((error as TraciaError).message).toContain('Some provider error')
+        expect((error as TraciaError).message).not.toContain('undefined: ')
+      }
+    })
+
+    it('captures original error from fullStream error events during streaming', async () => {
+      const tracia = new Tracia({ apiKey: validApiKey })
+      vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
+
+      const { streamText } = await import('ai')
+      const originalError = new Error('undefined: The provided model identifier is invalid.')
+      ;(originalError as Record<string, unknown>).statusCode = 400
+      ;(originalError as Record<string, unknown>).responseBody = '{"message":"The provided model identifier is invalid."}'
+
+      // The text promise would normally reject with a generic message, but
+      // since we capture the original error via fullStream, it's never accessed.
+      // Suppress the unhandled rejection in test environment.
+      const textPromise = Promise.reject(new Error('No output generated. Check the stream for errors.'))
+      textPromise.catch(() => {})
+
+      vi.mocked(streamText).mockReturnValue({
+        fullStream: (async function* () {
+          yield { type: 'error', error: originalError }
+        })(),
+        text: textPromise,
+        usage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+        toolCalls: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      } as never)
+
+      const stream = tracia.runLocal({
+        stream: true,
+        model: 'amazon.titan-text-express-v1',
+        provider: LLMProvider.OPENAI,
+        messages: [{ role: 'user', content: 'Hello' }],
+        sendTrace: false,
+      })
+
+      // Suppress unhandled rejection from the result promise (it rejects with the same error)
+      stream.result.catch(() => {})
+
+      try {
+        for await (const _chunk of stream) {
+          // consume
+        }
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(TraciaError)
+        expect((error as TraciaError).code).toBe(TraciaErrorCode.PROVIDER_ERROR)
+        expect((error as TraciaError).message).toContain('The provided model identifier is invalid.')
+        expect((error as TraciaError).message).toContain('HTTP 400')
+        expect((error as TraciaError).message).toContain('amazon.titan-text-express-v1')
+        expect((error as TraciaError).statusCode).toBe(400)
       }
     })
   })
@@ -786,13 +884,12 @@ describe('runLocal with stream: true', () => {
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
       const { streamText } = await import('ai')
-      const mockTextStream = (async function* () {
-        yield 'Hello'
-        yield ' world'
-      })()
 
       vi.mocked(streamText).mockReturnValue({
-        textStream: mockTextStream,
+        fullStream: (async function* () {
+          yield { type: 'text-delta', text: 'Hello' }
+          yield { type: 'text-delta', text: ' world' }
+        })(),
         text: Promise.resolve('Hello world'),
         usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
         toolCalls: Promise.resolve([]),
@@ -815,12 +912,11 @@ describe('runLocal with stream: true', () => {
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
       const { streamText } = await import('ai')
-      const mockTextStream = (async function* () {
-        yield 'Hello'
-      })()
 
       vi.mocked(streamText).mockReturnValue({
-        textStream: mockTextStream,
+        fullStream: (async function* () {
+          yield { type: 'text-delta', text: 'Hello' }
+        })(),
         text: Promise.resolve('Hello'),
         usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
         toolCalls: Promise.resolve([]),
@@ -846,15 +942,14 @@ describe('runLocal with stream: true', () => {
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
       const { streamText } = await import('ai')
-      const mockTextStream = (async function* () {
-        yield 'Hello'
-        yield ' '
-        yield 'world'
-        yield '!'
-      })()
 
       vi.mocked(streamText).mockReturnValue({
-        textStream: mockTextStream,
+        fullStream: (async function* () {
+          yield { type: 'text-delta', text: 'Hello' }
+          yield { type: 'text-delta', text: ' ' }
+          yield { type: 'text-delta', text: 'world' }
+          yield { type: 'text-delta', text: '!' }
+        })(),
         text: Promise.resolve('Hello world!'),
         usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
         toolCalls: Promise.resolve([]),
@@ -881,12 +976,11 @@ describe('runLocal with stream: true', () => {
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
       const { streamText } = await import('ai')
-      const mockTextStream = (async function* () {
-        yield 'Hello world!'
-      })()
 
       vi.mocked(streamText).mockReturnValue({
-        textStream: mockTextStream,
+        fullStream: (async function* () {
+          yield { type: 'text-delta', text: 'Hello world!' }
+        })(),
         text: Promise.resolve('Hello world!'),
         usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
         toolCalls: Promise.resolve([]),
@@ -922,12 +1016,11 @@ describe('runLocal with stream: true', () => {
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
       const { streamText } = await import('ai')
-      const mockTextStream = (async function* () {
-        yield 'Hello'
-      })()
 
       vi.mocked(streamText).mockReturnValue({
-        textStream: mockTextStream,
+        fullStream: (async function* () {
+          yield { type: 'text-delta', text: 'Hello' }
+        })(),
         text: Promise.resolve('Hello'),
         usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
         toolCalls: Promise.resolve([]),
@@ -956,12 +1049,11 @@ describe('runLocal with stream: true', () => {
       vi.stubEnv('OPENAI_API_KEY', 'sk-test-key')
 
       const { streamText } = await import('ai')
-      const mockTextStream = (async function* () {
-        yield 'Hello'
-      })()
 
       vi.mocked(streamText).mockReturnValue({
-        textStream: mockTextStream,
+        fullStream: (async function* () {
+          yield { type: 'text-delta', text: 'Hello' }
+        })(),
         text: Promise.resolve('Hello'),
         usage: Promise.resolve({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
         toolCalls: Promise.resolve([]),

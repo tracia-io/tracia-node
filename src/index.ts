@@ -225,7 +225,7 @@ export class Tracia {
 
     const startTime = Date.now()
     let completionResult: CompletionResult | null = null
-    let errorMessage: string | null = null
+    let caughtError: TraciaError | null = null
 
     try {
       completionResult = await complete({
@@ -245,9 +245,10 @@ export class Tracia {
       })
     } catch (error) {
       if (error instanceof TraciaError) {
-        errorMessage = error.message
+        caughtError = error
       } else {
-        errorMessage = error instanceof Error ? error.message : String(error)
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        caughtError = new TraciaError(TraciaErrorCode.PROVIDER_ERROR, errorMessage)
       }
     }
 
@@ -261,8 +262,8 @@ export class Tracia {
         input: { messages: interpolatedMessages },
         variables: input.variables ?? null,
         output: completionResult?.text ?? null,
-        status: errorMessage ? SPAN_STATUS_ERROR : SPAN_STATUS_SUCCESS,
-        error: errorMessage,
+        status: caughtError ? SPAN_STATUS_ERROR : SPAN_STATUS_SUCCESS,
+        error: caughtError?.message ?? null,
         latencyMs,
         inputTokens: completionResult?.inputTokens ?? 0,
         outputTokens: completionResult?.outputTokens ?? 0,
@@ -280,8 +281,8 @@ export class Tracia {
       })
     }
 
-    if (errorMessage) {
-      throw new TraciaError(TraciaErrorCode.PROVIDER_ERROR, errorMessage)
+    if (caughtError) {
+      throw caughtError
     }
 
     const toolCalls = completionResult!.toolCalls
@@ -707,6 +708,10 @@ export class Tracia {
           message,
         })
       } catch (error) {
+        // Suppress the inner provider result promise rejection — it carries
+        // the same error we already handle here.
+        providerStream.result.catch(() => {})
+
         const latencyMs = Date.now() - startTime
         const isAborted = aborted || signal.aborted
         const errorMessage = isAborted

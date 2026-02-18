@@ -179,6 +179,83 @@ function sanitizeErrorMessage(message: string): string {
     .replace(/(authorization[=:\s]+)[^\s,}]+/gi, '$1[REDACTED]')
 }
 
+/**
+ * Extracts detailed error information from AI SDK errors.
+ *
+ * AI SDK errors (AI_APICallError, etc.) carry properties like responseBody and
+ * statusCode that contain the actual provider error details. The top-level
+ * error.message is often unhelpful (e.g. "undefined: ...") so we dig into
+ * these properties for the real message.
+ */
+function extractProviderErrorDetails(error: unknown): { message: string; statusCode?: number } {
+  if (!(error instanceof Error)) {
+    return { message: String(error) }
+  }
+
+  const errorRecord = error as unknown as Record<string, unknown>
+
+  const statusCode = typeof errorRecord.statusCode === 'number'
+    ? errorRecord.statusCode
+    : typeof errorRecord.status === 'number'
+      ? errorRecord.status
+      : undefined
+
+  // AI SDK's AI_APICallError stores the raw provider response in responseBody
+  if (typeof errorRecord.responseBody === 'string' && errorRecord.responseBody.length > 0) {
+    try {
+      const parsed = JSON.parse(errorRecord.responseBody)
+      const bodyMessage = parsed.message ?? parsed.error?.message ?? parsed.error
+      if (typeof bodyMessage === 'string' && bodyMessage.length > 0) {
+        return { message: bodyMessage, statusCode }
+      }
+    } catch {
+      if (errorRecord.responseBody.length < 500) {
+        return { message: errorRecord.responseBody as string, statusCode }
+      }
+    }
+  }
+
+  // Check data property for structured error info
+  if (errorRecord.data && typeof errorRecord.data === 'object') {
+    const data = errorRecord.data as Record<string, unknown>
+    if (typeof data.message === 'string' && data.message.length > 0) {
+      return { message: data.message, statusCode }
+    }
+  }
+
+  // Clean up AI SDK's "undefined: " prefix that appears when the error code is undefined
+  let message = error.message
+  if (message.startsWith('undefined: ')) {
+    message = message.slice('undefined: '.length)
+  }
+
+  // Walk the cause chain for more details
+  const cause = (error as unknown as { cause?: unknown }).cause
+  if (cause instanceof Error) {
+    const causeDetails = extractProviderErrorDetails(cause)
+    if (causeDetails.message !== message) {
+      return {
+        message: causeDetails.message,
+        statusCode: statusCode ?? causeDetails.statusCode,
+      }
+    }
+  }
+
+  return { message, statusCode }
+}
+
+/**
+ * Builds a user-facing error message with provider, model, HTTP status, and details.
+ */
+function buildProviderErrorMessage(
+  provider: string,
+  model: string,
+  details: { message: string; statusCode?: number }
+): string {
+  const statusPart = details.statusCode ? ` (HTTP ${details.statusCode})` : ''
+  return `${provider} error for model "${model}"${statusPart}: ${sanitizeErrorMessage(details.message)}`
+}
+
 export function resolveProvider(model: string, explicitProvider?: LLMProvider): LLMProvider {
   if (explicitProvider) return explicitProvider
 
@@ -393,10 +470,11 @@ export async function complete(options: CompletionOptions): Promise<CompletionRe
     }
   } catch (error) {
     if (error instanceof TraciaError) throw error
-    const rawMessage = error instanceof Error ? error.message : String(error)
+    const details = extractProviderErrorDetails(error)
     throw new TraciaError(
       TraciaErrorCode.PROVIDER_ERROR,
-      `${provider} error: ${sanitizeErrorMessage(rawMessage)}`
+      buildProviderErrorMessage(provider, options.model, details),
+      details.statusCode
     )
   }
 }
@@ -412,6 +490,11 @@ export function stream(options: StreamOptions): StreamResult {
   })
 
   async function* generateChunks(): AsyncGenerator<string> {
+    // Captured from fullStream error events — these carry the original provider
+    // error (e.g. AI_APICallError) before the AI SDK wraps it into a generic
+    // "No output generated" ProviderError.
+    let capturedStreamError: unknown = null
+
     try {
       const { streamText } = await loadAISdk()
       const model = await getLanguageModel(provider, options.model, options.apiKey)
@@ -436,8 +519,19 @@ export function stream(options: StreamOptions): StreamResult {
         ...(options.responseFormat && { responseFormat: options.responseFormat }),
       })
 
-      for await (const chunk of result.textStream) {
-        yield chunk
+      // Use fullStream instead of textStream to capture original provider errors.
+      // textStream swallows the original error and re-throws a generic
+      // "No output generated. Check the stream for errors." ProviderError.
+      for await (const event of result.fullStream) {
+        if (event.type === 'text-delta') {
+          yield event.text
+        } else if (event.type === 'error') {
+          capturedStreamError = event.error
+        }
+      }
+
+      if (capturedStreamError) {
+        throw capturedStreamError
       }
 
       const [text, usageData, toolCallsData, finishReasonData] = await Promise.all([
@@ -463,13 +557,17 @@ export function stream(options: StreamOptions): StreamResult {
         rejectResult!(traciaError)
         throw traciaError
       }
-      const rawMessage = error instanceof Error ? error.message : String(error)
-      const traciaError = error instanceof TraciaError
-        ? error
-        : new TraciaError(
-            TraciaErrorCode.PROVIDER_ERROR,
-            `${provider} error: ${sanitizeErrorMessage(rawMessage)}`
-          )
+      const originalError = capturedStreamError ?? error
+      if (originalError instanceof TraciaError) {
+        rejectResult!(originalError)
+        throw originalError
+      }
+      const details = extractProviderErrorDetails(originalError)
+      const traciaError = new TraciaError(
+        TraciaErrorCode.PROVIDER_ERROR,
+        buildProviderErrorMessage(provider, options.model, details),
+        details.statusCode
+      )
       rejectResult!(traciaError)
       throw traciaError
     }
@@ -495,6 +593,7 @@ export function responsesStream(options: ResponsesOptions): ResponsesStreamResul
     const outputItems: ResponsesOutputItem[] = []
     const toolCalls: Array<{ id: string; callId: string; name: string; arguments: Record<string, unknown> }> = []
     let aborted = false
+    let capturedStreamError: unknown = null
 
     try {
       const { createOpenAI } = await loadOpenAIProvider()
@@ -568,9 +667,17 @@ export function responsesStream(options: ResponsesOptions): ResponsesStreamResul
         providerOptions: mergeProviderOptions(options.providerOptions),
       })
 
-      for await (const chunk of result.textStream) {
-        fullText += chunk
-        yield { type: 'text_delta', data: chunk }
+      for await (const event of result.fullStream) {
+        if (event.type === 'text-delta') {
+          fullText += event.text
+          yield { type: 'text_delta', data: event.text }
+        } else if (event.type === 'error') {
+          capturedStreamError = event.error
+        }
+      }
+
+      if (capturedStreamError) {
+        throw capturedStreamError
       }
 
       const [usageData, toolCallsData] = await Promise.all([
@@ -640,11 +747,15 @@ export function responsesStream(options: ResponsesOptions): ResponsesStreamResul
         })
         return
       }
-      const rawMessage = error instanceof Error ? error.message : String(error)
-      const traciaError = new TraciaError(
-        TraciaErrorCode.PROVIDER_ERROR,
-        `OpenAI Responses API error: ${sanitizeErrorMessage(rawMessage)}`
-      )
+      const originalError = capturedStreamError ?? error
+      const details = extractProviderErrorDetails(originalError)
+      const traciaError = originalError instanceof TraciaError
+        ? originalError
+        : new TraciaError(
+            TraciaErrorCode.PROVIDER_ERROR,
+            `OpenAI Responses API error for model "${options.model}"${details.statusCode ? ` (HTTP ${details.statusCode})` : ''}: ${sanitizeErrorMessage(details.message)}`,
+            details.statusCode
+          )
       rejectResult!(traciaError)
       throw traciaError
     }
