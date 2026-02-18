@@ -1,6 +1,6 @@
 {
   "name": "tracia",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "TypeScript/JavaScript SDK for Tracia - store, test, and trace LLM prompts",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
