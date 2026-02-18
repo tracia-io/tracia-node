@@ -77,11 +77,13 @@ type AISDKModule = typeof import('ai')
 type OpenAIProviderModule = typeof import('@ai-sdk/openai')
 type AnthropicProviderModule = typeof import('@ai-sdk/anthropic')
 type GoogleProviderModule = typeof import('@ai-sdk/google')
+type BedrockProviderModule = typeof import('@ai-sdk/amazon-bedrock')
 
 let aiSdk: AISDKModule | null = null
 let openaiProvider: OpenAIProviderModule | null = null
 let anthropicProvider: AnthropicProviderModule | null = null
 let googleProvider: GoogleProviderModule | null = null
+let bedrockProvider: BedrockProviderModule | null = null
 
 async function loadAISdk(): Promise<AISDKModule> {
   if (aiSdk) return aiSdk
@@ -135,6 +137,19 @@ async function loadGoogleProvider(): Promise<GoogleProviderModule> {
   }
 }
 
+async function loadBedrockProvider(): Promise<BedrockProviderModule> {
+  if (bedrockProvider) return bedrockProvider
+  try {
+    bedrockProvider = await import('@ai-sdk/amazon-bedrock')
+    return bedrockProvider
+  } catch {
+    throw new TraciaError(
+      TraciaErrorCode.MISSING_PROVIDER_SDK,
+      'Amazon Bedrock provider not installed. Install it with: npm install @ai-sdk/amazon-bedrock'
+    )
+  }
+}
+
 /**
  * Combines multiple abort signals into one, with proper cleanup to prevent memory leaks.
  * Returns undefined if no signals need to be combined.
@@ -179,11 +194,52 @@ function sanitizeErrorMessage(message: string): string {
     .replace(/(authorization[=:\s]+)[^\s,}]+/gi, '$1[REDACTED]')
 }
 
+const BEDROCK_VENDOR_PREFIXES = ['anthropic.', 'amazon.', 'meta.', 'mistral.', 'cohere.', 'deepseek.']
+const KNOWN_REGION_PREFIXES = ['us', 'eu', 'ap', 'sa', 'ca', 'me', 'af']
+
+function getBedrockRegionPrefix(region: string): string {
+  return region.split('-')[0]
+}
+
+/**
+ * Bedrock model IDs for newer models must be prefixed with the region shorthand
+ * (e.g. "eu" for eu-central-1, "us" for us-east-1). If the model already has a
+ * region prefix, it is replaced to match the configured region.
+ */
+export function applyBedrockRegionPrefix(model: string, region: string): string {
+  const prefix = getBedrockRegionPrefix(region)
+  const firstDot = model.indexOf('.')
+  if (firstDot === -1) return `${prefix}.${model}`
+
+  const beforeDot = model.substring(0, firstDot)
+  if (KNOWN_REGION_PREFIXES.includes(beforeDot)) {
+    return `${prefix}.${model.substring(firstDot + 1)}`
+  }
+
+  return `${prefix}.${model}`
+}
+
+function isBedrockModel(model: string): boolean {
+  if (BEDROCK_VENDOR_PREFIXES.some(prefix => model.startsWith(prefix))) {
+    return true
+  }
+  const firstDot = model.indexOf('.')
+  if (firstDot > 0 && KNOWN_REGION_PREFIXES.includes(model.substring(0, firstDot))) {
+    const afterRegion = model.substring(firstDot + 1)
+    return BEDROCK_VENDOR_PREFIXES.some(prefix => afterRegion.startsWith(prefix))
+  }
+  return false
+}
+
 export function resolveProvider(model: string, explicitProvider?: LLMProvider): LLMProvider {
   if (explicitProvider) return explicitProvider
 
   const fromRegistry = getProviderForModel(model)
   if (fromRegistry) return fromRegistry
+
+  if (isBedrockModel(model)) {
+    return LLMProvider.AMAZON_BEDROCK
+  }
 
   if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
     return LLMProvider.OPENAI
@@ -218,6 +274,14 @@ async function getLanguageModel(provider: LLMProvider, model: string, apiKey: st
       const { createGoogleGenerativeAI } = await loadGoogleProvider()
       const google = createGoogleGenerativeAI({ apiKey })
       return google(model)
+    }
+    case LLMProvider.AMAZON_BEDROCK: {
+      const { createAmazonBedrock } = await loadBedrockProvider()
+      const region = process.env.AWS_REGION ?? 'eu-central-1'
+      const bedrock = apiKey
+        ? createAmazonBedrock({ apiKey, region })
+        : createAmazonBedrock({ region })
+      return bedrock(applyBedrockRegionPrefix(model, region))
     }
     default:
       throw new TraciaError(

@@ -70,6 +70,7 @@ export enum LLMProvider {
   OPENAI = 'openai',
   ANTHROPIC = 'anthropic',
   GOOGLE = 'google',
+  AMAZON_BEDROCK = 'amazon_bedrock',
 }
 
 export interface ApiErrorResponse {
