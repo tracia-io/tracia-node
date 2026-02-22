@@ -251,6 +251,9 @@ export function resolveProvider(model: string, explicitProvider?: LLMProvider): 
   if (model.startsWith('gemini-')) {
     return LLMProvider.GOOGLE
   }
+  if (model.startsWith('voyage-')) {
+    return LLMProvider.VOYAGE
+  }
 
   throw new TraciaError(
     TraciaErrorCode.UNSUPPORTED_MODEL,
@@ -282,6 +285,11 @@ async function getLanguageModel(provider: LLMProvider, model: string, apiKey: st
       const bedrock = createAmazonBedrock({ region })
       return bedrock(applyBedrockRegionPrefix(model, region))
     }
+    case LLMProvider.VOYAGE:
+      throw new TraciaError(
+        TraciaErrorCode.UNSUPPORTED_MODEL,
+        'Voyage is an embedding-only provider. Use runEmbedding() instead of runLocal().'
+      )
     default:
       throw new TraciaError(
         TraciaErrorCode.UNSUPPORTED_MODEL,
@@ -337,10 +345,62 @@ async function getEmbeddingModel(provider: LLMProvider, model: string, apiKey: s
   }
 }
 
+async function callVoyageEmbedding(
+  input: string[],
+  model: string,
+  apiKey: string,
+  timeoutMs?: number,
+): Promise<EmbedTextResult> {
+  const response = await fetch('https://api.voyageai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ input, model }),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new TraciaError(
+      TraciaErrorCode.PROVIDER_ERROR,
+      `Voyage AI API error ${response.status}: ${sanitizeErrorMessage(body)}`
+    )
+  }
+
+  const data = await response.json() as {
+    data: { embedding: number[]; index: number }[]
+    usage: { total_tokens: number }
+  }
+
+  const embeddings: EmbeddingVector[] = data.data
+    .sort((a, b) => a.index - b.index)
+    .map((item) => ({ values: item.embedding, index: item.index }))
+
+  return {
+    embeddings,
+    totalTokens: data.usage?.total_tokens ?? 0,
+    provider: LLMProvider.VOYAGE,
+  }
+}
+
 export async function embedText(options: EmbedTextOptions): Promise<EmbedTextResult> {
   const provider = resolveProvider(options.model, options.provider)
-  const embeddingModel = await getEmbeddingModel(provider, options.model, options.apiKey)
   const inputs = Array.isArray(options.input) ? options.input : [options.input]
+
+  // Voyage has no AI SDK provider — call API directly
+  if (provider === LLMProvider.VOYAGE) {
+    if (options.dimensions) {
+      throw new TraciaError(
+        TraciaErrorCode.UNSUPPORTED_MODEL,
+        'Voyage AI does not support custom embedding dimensions'
+      )
+    }
+    return callVoyageEmbedding(inputs, options.model, options.apiKey, options.timeoutMs)
+  }
+
+  const embeddingModel = await getEmbeddingModel(provider, options.model, options.apiKey)
 
   try {
     const { embedMany } = await loadAISdk()

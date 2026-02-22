@@ -114,6 +114,14 @@ const MODEL_TO_PROVIDER: Record<string, LLMProvider> = {
   // Amazon Bedrock - Embedding models
   'amazon.titan-embed-text-v2:0': LLMProvider.AMAZON_BEDROCK,
   'cohere.embed-english-v3': LLMProvider.AMAZON_BEDROCK,
+
+  // Voyage - Embedding models
+  'voyage-3': LLMProvider.VOYAGE,
+  'voyage-3-large': LLMProvider.VOYAGE,
+  'voyage-3-lite': LLMProvider.VOYAGE,
+  'voyage-code-3': LLMProvider.VOYAGE,
+  'voyage-finance-2': LLMProvider.VOYAGE,
+  'voyage-law-2': LLMProvider.VOYAGE,
 }
 
 export function getProviderForModel(modelId: string): LLMProvider | undefined {

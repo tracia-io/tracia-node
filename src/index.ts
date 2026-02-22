@@ -116,6 +116,7 @@ const ENV_VAR_MAP: Record<LLMProvider, string> = {
   [LLMProvider.ANTHROPIC]: 'ANTHROPIC_API_KEY',
   [LLMProvider.GOOGLE]: 'GOOGLE_API_KEY',
   [LLMProvider.AMAZON_BEDROCK]: 'BEDROCK_API_KEY',
+  [LLMProvider.VOYAGE]: 'VOYAGE_API_KEY',
 }
 
 function convertResponsesItemToMessage(item: ResponsesInputItem): LocalPromptMessage {

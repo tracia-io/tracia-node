@@ -71,6 +71,7 @@ export enum LLMProvider {
   ANTHROPIC = 'anthropic',
   GOOGLE = 'google',
   AMAZON_BEDROCK = 'amazon_bedrock',
+  VOYAGE = 'voyage',
 }
 
 export enum SpanKind {
