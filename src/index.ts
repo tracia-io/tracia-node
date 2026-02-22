@@ -5,6 +5,7 @@ import {
   complete,
   stream,
   responsesStream,
+  embedText,
   resolveProvider,
   CompletionResult,
 } from './providers'
@@ -27,12 +28,15 @@ import {
   ResponsesStream,
   ResponsesEvent,
   ResponsesInputItem,
+  RunEmbeddingInput,
+  RunEmbeddingResult,
+  SpanKind,
 } from './types'
 import { generateSpanId, generateTraceId, isValidSpanIdFormat } from './utils'
 
 export { TraciaError } from './errors'
 export { TraciaSession } from './session'
-export type { SessionRunLocalInput, SessionRunResponsesInput } from './session'
+export type { SessionRunLocalInput, SessionRunResponsesInput, SessionRunEmbeddingInput } from './session'
 export type {
   TraciaOptions,
   RunVariables,
@@ -86,8 +90,13 @@ export type {
   RunResponsesInput,
   RunResponsesResult,
   ResponsesStream,
+  // Embedding types
+  RunEmbeddingInput,
+  RunEmbeddingResult,
+  EmbeddingVector,
+  EmbeddingUsage,
 } from './types'
-export { TraciaErrorCode, LLMProvider } from './types'
+export { TraciaErrorCode, LLMProvider, SpanKind } from './types'
 
 export const Eval = {
   POSITIVE: 1,
@@ -806,6 +815,144 @@ export class Tracia {
     signal2.addEventListener('abort', onAbort, { once: true })
 
     return controller.signal
+  }
+
+  /**
+   * Generate embeddings for text input(s) using an embedding model.
+   *
+   * @example Single text
+   * ```typescript
+   * const result = await tracia.runEmbedding({
+   *   model: 'text-embedding-3-small',
+   *   input: 'Hello world',
+   * })
+   * console.log(result.embeddings[0].values.length) // 1536
+   * ```
+   *
+   * @example Batch
+   * ```typescript
+   * const result = await tracia.runEmbedding({
+   *   model: 'text-embedding-3-small',
+   *   input: ['Hello', 'World'],
+   * })
+   * console.log(result.embeddings.length) // 2
+   * ```
+   */
+  async runEmbedding(input: RunEmbeddingInput): Promise<RunEmbeddingResult> {
+    this.validateRunEmbeddingInput(input)
+
+    let spanId = ''
+    let traceId = ''
+    if (input.sendTrace !== false) {
+      if (input.spanId && !isValidSpanIdFormat(input.spanId)) {
+        throw new TraciaError(
+          TraciaErrorCode.INVALID_REQUEST,
+          `Invalid span ID format. Must match: sp_ + 16 hex characters (e.g., sp_1234567890abcdef)`
+        )
+      }
+      spanId = input.spanId || generateSpanId()
+      traceId = input.traceId || generateTraceId()
+    }
+
+    const provider = resolveProvider(input.model, input.provider)
+    const apiKey = this.getProviderApiKey(provider, input.providerApiKey)
+
+    const startTime = Date.now()
+    let embeddingResult: Awaited<ReturnType<typeof embedText>> | null = null
+    let errorMessage: string | null = null
+
+    try {
+      embeddingResult = await embedText({
+        model: input.model,
+        input: input.input,
+        apiKey,
+        provider: input.provider,
+        dimensions: input.dimensions,
+        timeoutMs: input.timeoutMs,
+      })
+    } catch (error) {
+      if (error instanceof TraciaError) {
+        errorMessage = error.message
+      } else {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+    }
+
+    const latencyMs = Date.now() - startTime
+    const inputTexts = Array.isArray(input.input) ? input.input : [input.input]
+
+    if (spanId) {
+      const embeddingCount = embeddingResult?.embeddings.length ?? 0
+      const embeddingDimensions = embeddingResult?.embeddings[0]?.values.length ?? 0
+
+      this.scheduleSpanCreation(spanId, {
+        spanId,
+        model: input.model,
+        provider: embeddingResult?.provider ?? provider,
+        input: { text: inputTexts },
+        variables: null,
+        output: embeddingResult
+          ? JSON.stringify({ dimensions: embeddingDimensions, count: embeddingCount })
+          : null,
+        status: errorMessage ? SPAN_STATUS_ERROR : SPAN_STATUS_SUCCESS,
+        error: errorMessage,
+        latencyMs,
+        inputTokens: embeddingResult?.totalTokens ?? 0,
+        outputTokens: 0,
+        totalTokens: embeddingResult?.totalTokens ?? 0,
+        tags: input.tags,
+        userId: input.userId,
+        sessionId: input.sessionId,
+        traceId,
+        parentSpanId: input.parentSpanId,
+        spanKind: SpanKind.EMBEDDING,
+      })
+    }
+
+    if (errorMessage || !embeddingResult) {
+      throw new TraciaError(TraciaErrorCode.PROVIDER_ERROR, errorMessage ?? 'Embedding call returned no result')
+    }
+
+    return {
+      embeddings: embeddingResult.embeddings,
+      spanId,
+      traceId,
+      latencyMs,
+      usage: { totalTokens: embeddingResult.totalTokens },
+      cost: null,
+      provider: embeddingResult.provider,
+      model: input.model,
+    }
+  }
+
+  private validateRunEmbeddingInput(input: RunEmbeddingInput): void {
+    if (!input.model || input.model.trim() === '') {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'model is required and cannot be empty'
+      )
+    }
+
+    if (!input.input || (Array.isArray(input.input) && input.input.length === 0)) {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'input is required and cannot be empty'
+      )
+    }
+
+    if (typeof input.input === 'string' && input.input.trim() === '') {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'input text cannot be empty'
+      )
+    }
+
+    if (Array.isArray(input.input) && input.input.some(text => text.trim() === '')) {
+      throw new TraciaError(
+        TraciaErrorCode.INVALID_REQUEST,
+        'input array cannot contain empty strings'
+      )
+    }
   }
 
   async flush(): Promise<void> {

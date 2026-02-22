@@ -12,6 +12,7 @@ import {
   ResponsesInputItem,
   ResponsesOutputItem,
   ResponsesEvent,
+  EmbeddingVector,
 } from '../types'
 
 export interface CompletionOptions {
@@ -278,9 +279,7 @@ async function getLanguageModel(provider: LLMProvider, model: string, apiKey: st
     case LLMProvider.AMAZON_BEDROCK: {
       const { createAmazonBedrock } = await loadBedrockProvider()
       const region = process.env.AWS_REGION ?? 'eu-central-1'
-      const bedrock = apiKey
-        ? createAmazonBedrock({ apiKey, region })
-        : createAmazonBedrock({ region })
+      const bedrock = createAmazonBedrock({ region })
       return bedrock(applyBedrockRegionPrefix(model, region))
     }
     default:
@@ -288,6 +287,97 @@ async function getLanguageModel(provider: LLMProvider, model: string, apiKey: st
         TraciaErrorCode.UNSUPPORTED_MODEL,
         `Unsupported provider: ${provider}`
       )
+  }
+}
+
+export interface EmbedTextOptions {
+  model: string
+  input: string | string[]
+  apiKey: string
+  provider?: LLMProvider
+  dimensions?: number
+  timeoutMs?: number
+}
+
+export interface EmbedTextResult {
+  embeddings: EmbeddingVector[]
+  totalTokens: number
+  provider: LLMProvider
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getEmbeddingModel(provider: LLMProvider, model: string, apiKey: string): Promise<any> {
+  switch (provider) {
+    case LLMProvider.OPENAI: {
+      const { createOpenAI } = await loadOpenAIProvider()
+      const openai = createOpenAI({ apiKey })
+      return openai.textEmbeddingModel(model)
+    }
+    case LLMProvider.GOOGLE: {
+      const { createGoogleGenerativeAI } = await loadGoogleProvider()
+      const google = createGoogleGenerativeAI({ apiKey })
+      return google.textEmbeddingModel(model)
+    }
+    case LLMProvider.AMAZON_BEDROCK: {
+      const { createAmazonBedrock } = await loadBedrockProvider()
+      const region = process.env.AWS_REGION ?? 'eu-central-1'
+      const bedrock = createAmazonBedrock({ region })
+      return bedrock.textEmbeddingModel(applyBedrockRegionPrefix(model, region))
+    }
+    case LLMProvider.ANTHROPIC:
+      throw new TraciaError(
+        TraciaErrorCode.UNSUPPORTED_MODEL,
+        'Anthropic does not offer embedding models. Use OpenAI, Google, or Amazon Bedrock instead.'
+      )
+    default:
+      throw new TraciaError(
+        TraciaErrorCode.UNSUPPORTED_MODEL,
+        `Unsupported provider for embeddings: ${provider}`
+      )
+  }
+}
+
+export async function embedText(options: EmbedTextOptions): Promise<EmbedTextResult> {
+  const provider = resolveProvider(options.model, options.provider)
+  const embeddingModel = await getEmbeddingModel(provider, options.model, options.apiKey)
+  const inputs = Array.isArray(options.input) ? options.input : [options.input]
+
+  try {
+    const { embedMany } = await loadAISdk()
+
+    const providerOptions: ProviderOptions = {}
+    if (options.dimensions) {
+      if (provider === LLMProvider.OPENAI) {
+        providerOptions.openai = { dimensions: options.dimensions }
+      } else if (provider === LLMProvider.GOOGLE) {
+        providerOptions.google = { outputDimensionality: options.dimensions }
+      }
+    }
+
+    const result = await embedMany({
+      model: embeddingModel,
+      values: inputs,
+      abortSignal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+      ...(Object.keys(providerOptions).length > 0 && { providerOptions }),
+    })
+
+    const embeddings: EmbeddingVector[] = result.embeddings.map((values: number[], index: number) => ({
+      values,
+      index,
+    }))
+
+    return {
+      embeddings,
+      totalTokens: result.usage?.tokens ?? 0,
+      provider,
+    }
+  } catch (error) {
+    if (error instanceof TraciaError) throw error
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    throw new TraciaError(
+      TraciaErrorCode.PROVIDER_ERROR,
+      `${provider} embedding error: ${sanitizeErrorMessage(rawMessage)}`
+    )
   }
 }
 
@@ -339,11 +429,15 @@ function convertMessages(messages: LocalPromptMessage[]): Array<{
     // System/user/assistant messages with string content: pass through
     // Convert 'developer' role to 'system' for AI SDK compatibility
     const role = msg.role === 'developer' ? 'system' : msg.role as 'system' | 'user' | 'assistant'
+
+    if (typeof msg.content === 'string') {
+      return { role, content: msg.content }
+    }
+
+    // System/user/assistant messages with array content: join text parts into string
     return {
       role,
-      content: typeof msg.content === 'string'
-        ? msg.content
-        : msg.content.map(b => b.type === 'text' ? (b as { text: string }).text : '').join(''),
+      content: msg.content.map(b => b.type === 'text' ? (b as { text: string }).text : '').join(''),
     }
   })
 }

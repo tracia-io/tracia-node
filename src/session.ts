@@ -6,6 +6,8 @@ import type {
   RunResponsesInput,
   RunResponsesResult,
   ResponsesStream,
+  RunEmbeddingInput,
+  RunEmbeddingResult,
 } from './types'
 
 /**
@@ -19,6 +21,12 @@ export type SessionRunLocalInput = Omit<RunLocalInput, 'traceId' | 'parentSpanId
  * as those are managed by the session.
  */
 export type SessionRunResponsesInput = Omit<RunResponsesInput, 'traceId' | 'parentSpanId'>
+
+/**
+ * Input for session.runEmbedding() - same as RunEmbeddingInput but without traceId/parentSpanId
+ * as those are managed by the session.
+ */
+export type SessionRunEmbeddingInput = Omit<RunEmbeddingInput, 'traceId' | 'parentSpanId'>
 
 /**
  * A session for grouping related spans together under a single trace.
@@ -181,6 +189,22 @@ export class TraciaSession {
       result: wrappedResult,
       abort: () => responsesStream.abort(),
     }
+  }
+
+  /**
+   * Generate embeddings, automatically linking the span to this session.
+   * See Tracia.runEmbedding() for full documentation.
+   */
+  async runEmbedding(input: SessionRunEmbeddingInput): Promise<RunEmbeddingResult> {
+    const inputWithSession: RunEmbeddingInput = {
+      ...input,
+      traceId: this.traceId ?? undefined,
+      parentSpanId: this.lastSpanId ?? undefined,
+    }
+
+    const result = await this.tracia.runEmbedding(inputWithSession)
+    this.updateSessionState(result.spanId, result.traceId)
+    return result
   }
 
   private updateSessionState(spanId: string, traceId: string): void {

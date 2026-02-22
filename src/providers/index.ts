@@ -2,6 +2,7 @@ export {
   complete,
   stream,
   responsesStream,
+  embedText,
   resolveProvider,
   type CompletionOptions,
   type CompletionResult,
@@ -10,4 +11,6 @@ export {
   type ResponsesOptions,
   type ResponsesResult,
   type ResponsesStreamResult,
+  type EmbedTextOptions,
+  type EmbedTextResult,
 } from './ai-sdk'

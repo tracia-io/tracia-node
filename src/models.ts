@@ -102,6 +102,18 @@ const MODEL_TO_PROVIDER: Record<string, LLMProvider> = {
   'amazon.nova-lite-v1:0': LLMProvider.AMAZON_BEDROCK,
   'amazon.nova-pro-v1:0': LLMProvider.AMAZON_BEDROCK,
   'mistral.pixtral-large-2502-v1:0': LLMProvider.AMAZON_BEDROCK,
+
+  // OpenAI - Embedding models
+  'text-embedding-3-small': LLMProvider.OPENAI,
+  'text-embedding-3-large': LLMProvider.OPENAI,
+  'text-embedding-ada-002': LLMProvider.OPENAI,
+
+  // Google - Embedding models
+  'text-embedding-004': LLMProvider.GOOGLE,
+
+  // Amazon Bedrock - Embedding models
+  'amazon.titan-embed-text-v2:0': LLMProvider.AMAZON_BEDROCK,
+  'cohere.embed-english-v3': LLMProvider.AMAZON_BEDROCK,
 }
 
 export function getProviderForModel(modelId: string): LLMProvider | undefined {

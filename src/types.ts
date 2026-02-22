@@ -73,6 +73,12 @@ export enum LLMProvider {
   AMAZON_BEDROCK = 'amazon_bedrock',
 }
 
+export enum SpanKind {
+  ROOT = 'ROOT',
+  LLM = 'LLM',
+  EMBEDDING = 'EMBEDDING',
+}
+
 export interface ApiErrorResponse {
   error: {
     code: string
@@ -398,7 +404,7 @@ export interface CreateSpanPayload {
   spanId: string
   model: string
   provider: LLMProvider
-  input: { messages: LocalPromptMessage[] }
+  input: { messages?: LocalPromptMessage[]; text?: string | string[] }
   variables: Record<string, string> | null
   output: string | null
   status: SpanStatus
@@ -419,6 +425,8 @@ export interface CreateSpanPayload {
   traceId?: string
   /** Parent span ID for chaining spans in a sequence */
   parentSpanId?: string
+  /** Span kind override (for embedding spans) */
+  spanKind?: SpanKind
 }
 
 export interface CreateSpanResult {
@@ -638,6 +646,73 @@ export interface ResponsesStream {
 
   /** Abort the stream */
   abort(): void
+}
+
+// ============================================================================
+// Embedding types
+// ============================================================================
+
+export interface RunEmbeddingInput {
+  /** Text(s) to embed */
+  input: string | string[]
+  /** Embedding model (e.g., 'text-embedding-3-small') */
+  model: string
+  /** Explicitly specify the provider */
+  provider?: LLMProvider
+  /** Provider API key override */
+  providerApiKey?: string
+  /** Optional dimension override */
+  dimensions?: number
+  /** Whether to send span to Tracia (default: true) */
+  sendTrace?: boolean
+  /** Custom span ID */
+  spanId?: string
+  /** Tags for the span */
+  tags?: string[]
+  /** User ID for the span */
+  userId?: string
+  /** Session ID for the span */
+  sessionId?: string
+  /** Trace ID to group related spans together */
+  traceId?: string
+  /** Parent span ID for chaining spans in a sequence */
+  parentSpanId?: string
+  /** Timeout in milliseconds */
+  timeoutMs?: number
+}
+
+export interface EmbeddingVector {
+  /** The embedding values */
+  values: number[]
+  /** Index of this embedding in the input array */
+  index: number
+}
+
+export interface EmbeddingUsage {
+  /** Total tokens used for the embedding request */
+  totalTokens: number
+}
+
+export interface RunEmbeddingResult {
+  /** The generated embeddings */
+  embeddings: EmbeddingVector[]
+  /** Span ID for this request */
+  spanId: string
+  /** Trace ID grouping related spans */
+  traceId: string
+  /** Latency in milliseconds */
+  latencyMs: number
+  /** Token usage */
+  usage: EmbeddingUsage
+  /**
+   * Estimated cost in USD.
+   * Currently always `null` — cost is calculated server-side when the span is ingested.
+   */
+  cost: number | null
+  /** The provider used */
+  provider: LLMProvider
+  /** The model used */
+  model: string
 }
 
 // ============================================================================
