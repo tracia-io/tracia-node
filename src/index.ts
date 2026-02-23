@@ -82,6 +82,7 @@ export type {
   // Message content parts
   TextPart,
   ToolCallPart,
+  ImagePart,
   ContentPart,
   // Responses API types
   ResponsesInputItem,

@@ -494,7 +494,25 @@ function convertMessages(messages: LocalPromptMessage[]): Array<{
       return { role, content: msg.content }
     }
 
-    // System/user/assistant messages with array content: join text parts into string
+    // User messages with array content: pass through image and text parts
+    if (role === 'user') {
+      return {
+        role,
+        content: msg.content.map(part => {
+          if (part.type === 'image') {
+            const imagePart = part as { type: 'image'; image: string | Buffer | ArrayBuffer | Uint8Array; mimeType?: string }
+            return {
+              type: 'image' as const,
+              image: imagePart.image,
+              ...(imagePart.mimeType && { mimeType: imagePart.mimeType }),
+            }
+          }
+          return part
+        }),
+      }
+    }
+
+    // Other messages with array content: join text parts into string
     return {
       role,
       content: msg.content.map(b => b.type === 'text' ? (b as { text: string }).text : '').join(''),

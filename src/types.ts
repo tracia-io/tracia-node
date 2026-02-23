@@ -290,7 +290,16 @@ export interface ToolCallPart {
   arguments: Record<string, unknown>
 }
 
-export type ContentPart = TextPart | ToolCallPart
+/**
+ * Image part in user messages.
+ */
+export interface ImagePart {
+  type: 'image'
+  image: string | Buffer | ArrayBuffer | Uint8Array
+  mimeType?: string
+}
+
+export type ContentPart = TextPart | ToolCallPart | ImagePart
 
 // ============================================================================
 // Messages
