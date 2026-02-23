@@ -282,7 +282,10 @@ async function getLanguageModel(provider: LLMProvider, model: string, apiKey: st
     case LLMProvider.AMAZON_BEDROCK: {
       const { createAmazonBedrock } = await loadBedrockProvider()
       const region = process.env.AWS_REGION ?? 'eu-central-1'
-      const bedrock = createAmazonBedrock({ region })
+      const bedrock = createAmazonBedrock({
+        region,
+        ...(apiKey && { apiKey }),
+      })
       return bedrock(applyBedrockRegionPrefix(model, region))
     }
     case LLMProvider.VOYAGE:
@@ -329,7 +332,10 @@ async function getEmbeddingModel(provider: LLMProvider, model: string, apiKey: s
     case LLMProvider.AMAZON_BEDROCK: {
       const { createAmazonBedrock } = await loadBedrockProvider()
       const region = process.env.AWS_REGION ?? 'eu-central-1'
-      const bedrock = createAmazonBedrock({ region })
+      const bedrock = createAmazonBedrock({
+        region,
+        ...(apiKey && { apiKey }),
+      })
       return bedrock.textEmbeddingModel(applyBedrockRegionPrefix(model, region))
     }
     case LLMProvider.ANTHROPIC:
